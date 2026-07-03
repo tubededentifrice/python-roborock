@@ -9,6 +9,7 @@ from roborock.map.b01_q10_map_parser import (
     B01Q10MapParser,
     Q10Room,
     is_map_packet,
+    is_saved_map_packet,
     is_trace_packet,
     lz4_block_decompress,
     parse_map_packet,
@@ -20,6 +21,10 @@ TRACE_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace.bi
 TRACE_MULTI_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_multi.bin"
 # Real 14-point packet captured from an R1 corridor run (full session path).
 TRACE_SESSION_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_session.bin"
+# Real ss07 saved-map (03 01) frames with obstacle markers, shared by
+# @andrewlyeats (map id zeroed, everything else as-captured).
+SAVED_MAP_2OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_2obstacles.bin"
+SAVED_MAP_53OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_53obstacles.bin"
 
 
 def _payload() -> bytes:
@@ -349,6 +354,64 @@ def test_carpet_mask_ignored_when_uncompressed_len_mismatches() -> None:
     block = _literal_lz4_block(carpet)
     tail = bytes([0, 0]) + (999).to_bytes(4, "big") + len(block).to_bytes(2, "big") + block
     assert parse_map_packet(FIXTURE.read_bytes() + tail).carpet_mask is None
+
+
+# --- Obstacle markers (saved-map 03 01 frames) -------------------------------
+
+
+def _obstacle_section(obstacles: list[tuple[int, int]]) -> bytes:
+    """Build an obstacle section: ``[count: u8]`` then int16-BE (x, y) pairs."""
+    out = bytes([len(obstacles)])
+    for x, y in obstacles:
+        out += int.to_bytes(x & 0xFFFF, 2, "big") + int.to_bytes(y & 0xFFFF, 2, "big")
+    return out
+
+
+def test_saved_map_marker_is_recognized() -> None:
+    """A 03 01 frame is a saved-map packet, distinct from the 01 01 current map."""
+    payload = SAVED_MAP_2OBSTACLES.read_bytes()
+    assert is_saved_map_packet(payload)
+    assert not is_map_packet(payload)
+    # It still shares the current-map header layout (width/height/rooms decode).
+    packet = parse_map_packet(payload)
+    assert (packet.width, packet.height) == (219, 254)
+    assert packet.map_id == 0  # zeroed in the shared capture
+
+
+def test_parse_saved_map_obstacles_matches_capture() -> None:
+    """The 2-obstacle frame decodes both markers with their captured raw coords."""
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
+    assert [(o.x, o.y) for o in packet.obstacles] == [(-4633, -1946), (-5231, -3852)]
+
+
+def test_parse_saved_map_dense_obstacles_count() -> None:
+    """The dense frame decodes all 53 obstacle markers."""
+    packet = parse_map_packet(SAVED_MAP_53OBSTACLES.read_bytes())
+    assert len(packet.obstacles) == 53
+
+
+def test_parse_obstacles_from_synthetic_tail() -> None:
+    """Obstacles decode from the section following a (valid) carpet block."""
+    width, height = 8, 6  # the fixture's dimensions
+    carpet = bytes(width * height)
+    tail = _carpet_tail(width, height, carpet) + _obstacle_section([(10, -20), (-30, 40)])
+    packet = parse_map_packet(FIXTURE.read_bytes() + tail)
+    assert [(o.x, o.y) for o in packet.obstacles] == [(10, -20), (-30, 40)]
+
+
+def test_parse_map_packet_without_obstacles() -> None:
+    """A current-map frame (no obstacle tail) yields no obstacles."""
+    assert parse_map_packet(FIXTURE.read_bytes()).obstacles == []
+
+
+def test_obstacles_ignored_without_valid_carpet_block() -> None:
+    """Obstacles are only located after a valid carpet block; otherwise dropped.
+
+    Without the carpet block to anchor the offset the trailing bytes can't be
+    trusted as an obstacle section, so nothing is decoded (rather than misread)."""
+    # Erase section then obstacle-looking bytes, but no carpet block in between.
+    tail = bytes([0, 0]) + _obstacle_section([(10, -20)])
+    assert parse_map_packet(FIXTURE.read_bytes() + tail).obstacles == []
 
 
 def _calibrated_map_payload(

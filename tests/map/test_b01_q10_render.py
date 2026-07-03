@@ -31,6 +31,7 @@ from roborock.map.b01_q10_render import (
 )
 
 FIXTURE = Path("tests/map/testdata/b01_q10_map.bin")
+SAVED_MAP_2OBSTACLES = Path("tests/map/testdata/b01_q10_saved_map_2obstacles.bin")
 CONFIG = B01Q10MapParserConfig()
 
 # identity-ish calibration used across the geometry tests: world (x, y) -> grid
@@ -133,6 +134,30 @@ def test_render_partial_erase() -> None:
 
     after_floor = render.layers.class_counts.get("floor", 0)
     assert 0 < after_floor < before_floor  # some, not all, floor removed
+
+
+def test_render_places_obstacles_from_header() -> None:
+    """Obstacle markers are placed via the header origin -- no path calibration.
+
+    Ground-truthed against @andrewlyeats's 2-obstacle capture: header origin
+    (1651, 434) and the /50 obstacle scale put the markers at grid px (72.4, 82.3)
+    and (60.5, 120.4)."""
+    render = _render(parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes()))  # calibration=None
+    obstacles = render.map_data.obstacles
+    assert obstacles is not None and len(obstacles) == 2
+    assert (round(obstacles[0].x, 1), round(obstacles[0].y, 1)) == (72.4, 82.3)
+    assert (round(obstacles[1].x, 1), round(obstacles[1].y, 1)) == (60.5, 120.4)
+
+
+def test_render_obstacles_need_usable_header_origin() -> None:
+    """A keepalive header (no origin) leaves the obstacles unplaced."""
+    packet = replace(
+        parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes()),
+        header_calibration=Q10HeaderCalibration(
+            origin_x=0, origin_y=0, resolution=5, charger_x=0, charger_y=0, charger_phi=0
+        ),
+    )
+    assert _render(packet).map_data.obstacles is None
 
 
 def test_draw_path_on_map_draws_position() -> None:

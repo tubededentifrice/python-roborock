@@ -73,6 +73,10 @@ def decompose_layers(packet: "Q10MapPacket") -> GridLayers:
 
 MAP_PACKET_MARKER = b"\x01\x01"
 TRACE_PACKET_MARKER = b"\x02\x01"
+# Saved-map frames carry the same header/grid/room layout as the current-map
+# (``01 01``) frame -- only byte 0 differs (``03`` vs ``01``) -- but append an
+# obstacle-marker section to the tail. Reported by @andrewlyeats (ss07 captures).
+SAVED_MAP_PACKET_MARKER = b"\x03\x01"
 
 _MAP_ID_OFFSET = 2
 # Width and height are two consecutive u16be fields. An earlier revision read the
@@ -185,8 +189,16 @@ class Q10HeaderCalibration:
 
 
 @dataclass
+class Q10Point:
+    """A single point in Q10 map/trace coordinate space."""
+
+    x: int
+    y: int
+
+
+@dataclass
 class Q10MapPacket:
-    """Decoded contents of a Q10 ``01 01`` map packet."""
+    """Decoded contents of a Q10 ``01 01`` / ``03 01`` map packet."""
 
     map_id: int
     width: int
@@ -201,14 +213,11 @@ class Q10MapPacket:
     """Carpet mask decoded from the packet tail: a full ``width*height`` grid in
     the same (top-down) pixel space as :attr:`grid`, where a non-zero cell is
     carpet (the value is the carpet kind). ``None`` if the packet carried none."""
-
-
-@dataclass
-class Q10Point:
-    """A single point in Q10 map/trace coordinate space."""
-
-    x: int
-    y: int
+    obstacles: list[Q10Point] = field(default_factory=list)
+    """Obstacle markers decoded from the packet tail, in raw obstacle coordinates
+    (a distinct scale from the path -- see :data:`Q10 obstacle placement
+    <roborock.map.b01_q10_render>`). Only saved-map (``03 01``) frames carry
+    these; empty for current-map (``01 01``) frames."""
 
 
 @dataclass
@@ -283,8 +292,17 @@ _STRAY_POINT_STEP_RATIO = 20
 
 
 def is_map_packet(payload: bytes) -> bool:
-    """Return True if the payload is a Q10 full-map (``01 01``) packet."""
+    """Return True if the payload is a Q10 current-map (``01 01``) packet."""
     return payload[:2] == MAP_PACKET_MARKER
+
+
+def is_saved_map_packet(payload: bytes) -> bool:
+    """Return True if the payload is a Q10 saved-map (``03 01``) packet.
+
+    Saved-map frames share the current-map layout but append obstacle markers to
+    the tail (see :func:`_parse_obstacles`); :func:`parse_map_packet` decodes
+    both."""
+    return payload[:2] == SAVED_MAP_PACKET_MARKER
 
 
 def is_trace_packet(payload: bytes) -> bool:
@@ -441,8 +459,11 @@ def _parse_rooms(room_data: bytes, grid: bytes) -> list[Q10Room]:
 
 
 def parse_map_packet(payload: bytes) -> Q10MapPacket:
-    """Parse a Q10 ``01 01`` map packet into grid + room metadata."""
-    if len(payload) < _LAYOUT_COMPRESSED_OFFSET or not is_map_packet(payload):
+    """Parse a Q10 ``01 01`` current-map or ``03 01`` saved-map packet.
+
+    Both share the header/grid/room layout; the saved-map frame additionally
+    carries obstacle markers in its tail (see :func:`_parse_obstacles`)."""
+    if len(payload) < _LAYOUT_COMPRESSED_OFFSET or not (is_map_packet(payload) or is_saved_map_packet(payload)):
         raise RoborockException("Payload is not a Q10 map packet")
 
     map_id = int.from_bytes(payload[_MAP_ID_OFFSET : _MAP_ID_OFFSET + 4], "big")
@@ -470,6 +491,7 @@ def parse_map_packet(payload: bytes) -> Q10MapPacket:
     tail = payload[layout_end:]
     erase_zones = _parse_erase_zones(tail)
     carpet_mask = _parse_carpet_mask(tail, width, height)
+    obstacles = _parse_obstacles(tail, width, height)
     header_calibration = _parse_header_calibration(payload)
     return Q10MapPacket(
         map_id=map_id,
@@ -480,6 +502,7 @@ def parse_map_packet(payload: bytes) -> Q10MapPacket:
         erase_zones=erase_zones,
         header_calibration=header_calibration,
         carpet_mask=carpet_mask,
+        obstacles=obstacles,
     )
 
 
@@ -578,6 +601,54 @@ def _parse_carpet_mask(tail: bytes, width: int, height: int) -> bytes | None:
     except RoborockException:
         return None
     return mask if len(mask) == width * height else None
+
+
+def _obstacle_offset(tail: bytes, width: int, height: int) -> int:
+    """Byte offset in the tail where the obstacle section begins.
+
+    The obstacle markers follow the carpet block (``erase -> carpet ->
+    obstacles``), so this is the carpet block's end. If the carpet section is
+    absent or malformed the offset can't be trusted, so ``len(tail)`` is returned
+    (no obstacles decoded) rather than misreading the bytes. The carpet block is
+    validated the same way as :func:`_parse_carpet_mask` (``uncompressed_len ==
+    width*height``)."""
+    offset = _carpet_offset(tail)
+    if offset + 6 > len(tail):
+        return len(tail)
+    uncompressed_len = int.from_bytes(tail[offset : offset + 4], "big")
+    compressed_len = int.from_bytes(tail[offset + 4 : offset + 6], "big")
+    block_end = offset + 6 + compressed_len
+    if uncompressed_len != width * height or compressed_len <= 0 or block_end > len(tail):
+        return len(tail)
+    return block_end
+
+
+def _parse_obstacles(tail: bytes, width: int, height: int) -> list[Q10Point]:
+    """Decode the obstacle markers that follow the carpet mask in the packet tail.
+
+    Saved-map (``03 01``) frames carry an obstacle section after the carpet block:
+    ``[count: u8]`` then ``count`` ``(x, y)`` int16-BE pairs in raw obstacle
+    coordinates. The coordinates use their own scale (distinct from the erase/skip
+    sections and from the fitted path resolution); the renderer applies it against
+    the header origin -- see :mod:`roborock.map.b01_q10_render`.
+
+    Confirmed against real ss07 saved-map frames shared by @andrewlyeats (2- and
+    53-obstacle captures). Returns ``[]`` when the section is absent or does not
+    fit (e.g. current-map frames, whose tail carries no obstacles)."""
+    offset = _obstacle_offset(tail, width, height)
+    if offset >= len(tail):
+        return []
+    count = tail[offset]
+    end = offset + 1 + count * 4
+    if count == 0 or end > len(tail):
+        return []
+    return [
+        Q10Point(
+            x=int.from_bytes(tail[offset + 1 + i * 4 : offset + 3 + i * 4], "big", signed=True),
+            y=int.from_bytes(tail[offset + 3 + i * 4 : offset + 5 + i * 4], "big", signed=True),
+        )
+        for i in range(count)
+    ]
 
 
 def erased_packet(packet: "Q10MapPacket", cells: set[int]) -> "Q10MapPacket":

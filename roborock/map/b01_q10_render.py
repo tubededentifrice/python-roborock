@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw
-from vacuum_map_parser_base.map_data import Area, MapData, Path, Point, Wall
+from vacuum_map_parser_base.map_data import Area, MapData, Obstacle, ObstacleDetails, Path, Point, Wall
 
 from roborock.exceptions import RoborockException
 
@@ -59,6 +59,15 @@ _MIN_CALIBRATION_POINTS = 20
 # a much shorter path suffices to confirm it (early in a clean, not just a dense
 # one). See :func:`solve_calibration_with_origin`.
 _MIN_HEADER_CALIBRATION_POINTS = 4
+
+# Obstacle markers use their own fixed scale: raw obstacle units per grid pixel.
+# Unlike the path (whose resolution is fit against the floor), obstacles decode
+# with a constant /50 around the header origin (which is itself /10). Confirmed by
+# @andrewlyeats on ss07 saved-map (03 01) frames: raw (-4633, -1946) with header
+# origin (1651, 434) lands at grid px (72.4, 82.3) via col = ox/10 + x/50,
+# row = oy/10 - y/50 (row Y-flipped) -- i.e. a GridCalibration with resolution 50
+# around the header's pixel origin.
+_OBSTACLE_UNITS_PER_PIXEL = 50
 
 
 @dataclass
@@ -129,6 +138,11 @@ def render_q10_map(
     if calibration is not None:
         _place_path(map_data, calibration, path, robot_position)
         _place_zones(map_data, calibration, path, zones, virtual_walls)
+
+    # Obstacle markers carry their own header-anchored scale, so they are placed
+    # straight from the packet header -- independent of whether a path calibration
+    # has been solved (they are known as soon as the saved map arrives).
+    _place_obstacles(map_data, packet.obstacles, packet.header_calibration)
 
     return Q10MapRender(
         image_content=parsed.image_content,
@@ -246,6 +260,32 @@ def _place_zones(
     if path:
         cx, cy = calibration.world_to_pixel(path[0].x, path[0].y)
         map_data.charger = Point(cx, cy)
+
+
+def _place_obstacles(
+    map_data: MapData,
+    obstacles: Sequence[Q10Point],
+    header_calibration: Q10HeaderCalibration | None,
+) -> None:
+    """Place raw obstacle markers onto ``MapData.obstacles`` in grid pixels.
+
+    Obstacles use a fixed scale (:data:`_OBSTACLE_UNITS_PER_PIXEL`) around the
+    header's pixel origin, so -- unlike the path/zones -- they need only the map
+    packet's header, not a fitted path calibration. A keepalive header (no origin)
+    or an empty obstacle list leaves ``MapData.obstacles`` untouched.
+    """
+    if not obstacles or header_calibration is None:
+        return
+    origin = header_calibration.origin_pixels()
+    if origin is None:  # keepalive frame -- no usable origin
+        return
+    calibration = GridCalibration(
+        resolution=_OBSTACLE_UNITS_PER_PIXEL, origin_x=origin[0], origin_y=origin[1], y_sign=1
+    )
+    placed = [
+        Obstacle(*calibration.world_to_pixel(obstacle.x, obstacle.y), ObstacleDetails()) for obstacle in obstacles
+    ]
+    map_data.obstacles = placed or None
 
 
 def draw_path_on_map(
