@@ -17,12 +17,14 @@ from roborock.map.b01_q10_map_parser import (
     B01Q10MapParserConfig,
     Q10EraseZone,
     Q10HeaderCalibration,
+    Q10MapPacket,
     Q10Point,
     parse_map_packet,
 )
 from roborock.map.b01_q10_overlays import ZONE_TYPE_NO_GO, ZONE_TYPE_NO_MOP, Q10Zone
 from roborock.map.b01_q10_render import (
     _Q10_RESOLUTIONS,
+    Q10MapRender,
     draw_path_on_map,
     render_q10_map,
     solve_q10_calibration,
@@ -36,15 +38,28 @@ CONFIG = B01Q10MapParserConfig()
 IDENTITY = GridCalibration(resolution=1.0, origin_x=0.0, origin_y=5.0, y_sign=1)
 
 
-def _packet():
+def _packet() -> Q10MapPacket:
     return parse_map_packet(FIXTURE.read_bytes())
 
 
-def _render(packet=None, **kwargs):
-    packet = packet if packet is not None else _packet()
-    args = dict(calibration=None, path=[], robot_position=None, zones=[], virtual_walls=[], config=CONFIG)
-    args.update(kwargs)
-    return render_q10_map(packet, **args)
+def _render(
+    packet: Q10MapPacket | None = None,
+    *,
+    calibration: GridCalibration | None = None,
+    path: list[Q10Point] | None = None,
+    robot_position: Q10Point | None = None,
+    zones: list[Q10Zone] | None = None,
+    virtual_walls: list[Q10Zone] | None = None,
+) -> Q10MapRender:
+    return render_q10_map(
+        packet if packet is not None else _packet(),
+        calibration=calibration,
+        path=path or [],
+        robot_position=robot_position,
+        zones=zones or [],
+        virtual_walls=virtual_walls or [],
+        config=CONFIG,
+    )
 
 
 def _floor_world_points(layers, cal: GridCalibration, count: int) -> list[Q10Point]:
