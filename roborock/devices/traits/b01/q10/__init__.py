@@ -12,6 +12,7 @@ from roborock.protocols.b01_q10_protocol import Q10DpsUpdate, Q10Message
 
 from .button_light import ButtonLightTrait
 from .child_lock import ChildLockTrait
+from .clean_history import CleanHistoryTrait
 from .command import CommandTrait
 from .common import DpsUpdatable
 from .consumable import ConsumableTrait
@@ -28,6 +29,7 @@ __all__ = [
     "Q10PropertiesApi",
     "ButtonLightTrait",
     "ChildLockTrait",
+    "CleanHistoryTrait",
     "ConsumableTrait",
     "DoNotDisturbTrait",
     "DustCollectionTrait",
@@ -79,6 +81,9 @@ class Q10PropertiesApi(Trait):
     map: MapContentTrait
     """Trait for fetching the current parsed map (image + rooms)."""
 
+    clean_history: CleanHistoryTrait
+    """Trait for fetching the device clean-record history (``dpCleanRecord``)."""
+
     def __init__(self, channel: MqttChannel) -> None:
         """Initialize the B01Props API."""
         self._channel = channel
@@ -94,6 +99,7 @@ class Q10PropertiesApi(Trait):
         self.network_info = NetworkInfoTrait()
         self.consumable = ConsumableTrait()
         self.map = MapContentTrait()
+        self.clean_history = CleanHistoryTrait(self.command)
         # Read-model traits updated from the device's DPS push stream.
         self._updatable_traits: list[DpsUpdatable] = [
             self.status,
@@ -103,6 +109,7 @@ class Q10PropertiesApi(Trait):
             self.dust_collection,
             self.network_info,
             self.consumable,
+            self.clean_history,
             # The map trait owns the vector-overlay data points (no-go zones /
             # virtual walls), which arrive as status DPs rather than in the map
             # packet, so it updates from the DPS stream like any other read-model.
