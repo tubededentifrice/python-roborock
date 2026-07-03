@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v5.23.1 (2026-07-03)
+
+### Bug Fixes
+
+- Verify MQTT connection requires successful subscription
+  ([#858](https://github.com/Python-roborock/python-roborock/pull/858),
+  [`e3c97c6`](https://github.com/Python-roborock/python-roborock/commit/e3c97c68ce5cf38022241bf85d68977c223b8922))
+
+### Documentation
+
+- Clarify is_mqtt_connected docstring with motivation
+  ([#858](https://github.com/Python-roborock/python-roborock/pull/858),
+  [`e3c97c6`](https://github.com/Python-roborock/python-roborock/commit/e3c97c68ce5cf38022241bf85d68977c223b8922))
+
+### Refactoring
+
+- Remove unused fixtures in tests
+  ([#858](https://github.com/Python-roborock/python-roborock/pull/858),
+  [`e3c97c6`](https://github.com/Python-roborock/python-roborock/commit/e3c97c68ce5cf38022241bf85d68977c223b8922))
+
+
 ## v5.23.0 (2026-07-03)
 
 ### Features
