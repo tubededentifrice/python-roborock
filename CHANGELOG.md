@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v5.24.0 (2026-07-03)
+
+### Features
+
+- Implement dynamic map update listeners and filtering on HomeTrait
+  ([#861](https://github.com/Python-roborock/python-roborock/pull/861),
+  [`a793c8e`](https://github.com/Python-roborock/python-roborock/commit/a793c8e0a3e0359027d491d406dd36f2d62d41f6))
+
+
 ## v5.23.1 (2026-07-03)
 
 ### Bug Fixes
