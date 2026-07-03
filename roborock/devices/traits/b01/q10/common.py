@@ -23,16 +23,20 @@ from .command import CommandTrait
 class DpsUpdatable(Protocol):
     """A trait that updates itself from the Q10 DPS push stream.
 
-    Implemented by :class:`UpdatableTrait` (read-model traits) and by the map
-    trait, which owns the vector-overlay data points. The ``Q10PropertiesApi``
-    subscribe loop fans each push out to every such trait; each picks out the
-    data points it is responsible for and ignores the rest.
+    The ``Q10PropertiesApi`` subscribe loop fans each push out to every trait in
+    its ``_updatable_traits`` list; each picks out the data points it is
+    responsible for and ignores the rest. That list is heterogeneous -- most
+    members are converter-backed :class:`UpdatableTrait` read-models, but the map
+    trait implements ``update_from_dps`` directly to decode the vector overlays it
+    owns without a read-model. This Protocol is the shared shape the loop needs;
+    :class:`UpdatableTrait` declares it explicitly and the map trait satisfies it
+    structurally.
     """
 
     def update_from_dps(self, decoded_dps: dict[B01_Q10_DP, Any]) -> None: ...
 
 
-class UpdatableTrait(TraitUpdateListener):
+class UpdatableTrait(TraitUpdateListener, DpsUpdatable):
     """Base for Q10 traits backed by a read-model updated from the DPS stream.
 
     Concrete traits subclass both their ``RoborockBase`` read-model and this
