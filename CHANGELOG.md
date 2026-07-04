@@ -2,6 +2,49 @@
 
 <!-- version list -->
 
+## v5.25.0 (2026-07-03)
+
+### Chores
+
+- Add dataclasses for Roborock mower
+  ([#862](https://github.com/Python-roborock/python-roborock/pull/862),
+  [`413d6e5`](https://github.com/Python-roborock/python-roborock/commit/413d6e57ae74d3d54f9f1d4c8918ffbe9d215b7b))
+
+- Add some comments that better explain 'get_mop_only_vacuum_mode'
+  ([#817](https://github.com/Python-roborock/python-roborock/pull/817),
+  [`9474bfa`](https://github.com/Python-roborock/python-roborock/commit/9474bfaa607f15c7b66f520af17d81c849651f68))
+
+- Address comments ([#817](https://github.com/Python-roborock/python-roborock/pull/817),
+  [`9474bfa`](https://github.com/Python-roborock/python-roborock/commit/9474bfaa607f15c7b66f520af17d81c849651f68))
+
+- Address comments from copilot
+  ([#817](https://github.com/Python-roborock/python-roborock/pull/817),
+  [`9474bfa`](https://github.com/Python-roborock/python-roborock/commit/9474bfaa607f15c7b66f520af17d81c849651f68))
+
+- Apply suggestions from code review
+  ([#862](https://github.com/Python-roborock/python-roborock/pull/862),
+  [`413d6e5`](https://github.com/Python-roborock/python-roborock/commit/413d6e57ae74d3d54f9f1d4c8918ffbe9d215b7b))
+
+- Drop int typing and improve comment
+  ([#817](https://github.com/Python-roborock/python-roborock/pull/817),
+  [`9474bfa`](https://github.com/Python-roborock/python-roborock/commit/9474bfaa607f15c7b66f520af17d81c849651f68))
+
+### Features
+
+- Add better cleaning mode support
+  ([#817](https://github.com/Python-roborock/python-roborock/pull/817),
+  [`9474bfa`](https://github.com/Python-roborock/python-roborock/commit/9474bfaa607f15c7b66f520af17d81c849651f68))
+
+
+## v5.24.0 (2026-07-03)
+
+### Features
+
+- Implement dynamic map update listeners and filtering on HomeTrait
+  ([#861](https://github.com/Python-roborock/python-roborock/pull/861),
+  [`a793c8e`](https://github.com/Python-roborock/python-roborock/commit/a793c8e0a3e0359027d491d406dd36f2d62d41f6))
+
+
 ## v5.23.1 (2026-07-03)
 
 ### Bug Fixes
