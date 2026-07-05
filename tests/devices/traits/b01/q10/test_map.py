@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,7 +28,9 @@ from roborock.map.b01_q10_map_parser import (
     parse_map_packet,
     parse_trace_packet,
 )
-from roborock.roborock_message import RoborockMessage, RoborockMessageProtocol
+from roborock.protocols.b01_q10_protocol import Q10Message
+
+from .conftest import FakeB01Q10Channel
 
 FIXTURE = Path("tests/map/testdata/b01_q10_map.bin")
 TRACE_SESSION_FIXTURE = Path("tests/map/testdata/b01_q10_trace_session.bin")
@@ -36,12 +38,6 @@ TRACE_SESSION_FIXTURE = Path("tests/map/testdata/b01_q10_trace_session.bin")
 # A header calibration whose pixel origin (0, 5) is usable (not a keepalive
 # frame), so a short path can calibrate the fixture map.
 _USABLE_HEADER = Q10HeaderCalibration(origin_x=0, origin_y=50, resolution=5, charger_x=0, charger_y=0, charger_phi=0)
-
-
-def _map_message(
-    payload: bytes, protocol: RoborockMessageProtocol = RoborockMessageProtocol.MAP_RESPONSE
-) -> RoborockMessage:
-    return RoborockMessage(protocol=protocol, payload=payload, version=b"B01")
 
 
 def _trait_with_map() -> MapContentTrait:
@@ -109,24 +105,25 @@ def test_map_push_populates_layers() -> None:
 # --- Integration through the Q10PropertiesApi subscribe loop -----------------
 
 
-@pytest.fixture
-def message_queue() -> asyncio.Queue[RoborockMessage]:
+@pytest.fixture(name="message_queue")
+def message_queue_fixture() -> asyncio.Queue[Q10Message]:
     return asyncio.Queue()
 
 
-@pytest.fixture
-def mock_channel(message_queue: asyncio.Queue[RoborockMessage]) -> AsyncMock:
-    async def mock_stream() -> AsyncGenerator[RoborockMessage, None]:
+@pytest.fixture(name="mock_channel")
+def mock_channel_fixture(message_queue: asyncio.Queue[Q10Message]) -> FakeB01Q10Channel:
+    channel = FakeB01Q10Channel()
+
+    async def mock_stream() -> AsyncGenerator[Q10Message, None]:
         while True:
             yield await message_queue.get()
 
-    channel = AsyncMock()
-    channel.subscribe_stream = Mock(return_value=mock_stream())
+    setattr(channel, "subscribe_stream", Mock(side_effect=mock_stream))
     return channel
 
 
-@pytest.fixture
-async def q10_api(mock_channel: AsyncMock) -> AsyncGenerator[Q10PropertiesApi, None]:
+@pytest.fixture(name="q10_api")
+async def q10_api_fixture(mock_channel: FakeB01Q10Channel) -> AsyncGenerator[Q10PropertiesApi, None]:
     api = create(mock_channel)
     await api.start()
     yield api
@@ -141,12 +138,12 @@ async def _wait_for(predicate, timeout: float = 2.0) -> None:
 
 async def test_subscribe_loop_routes_map_push(
     q10_api: Q10PropertiesApi,
-    message_queue: asyncio.Queue[RoborockMessage],
+    message_queue: asyncio.Queue[Q10Message],
 ) -> None:
     """A map pushed onto the stream is routed to the map trait by the loop."""
     assert q10_api.map.image_content is None
 
-    message_queue.put_nowait(_map_message(FIXTURE.read_bytes()))
+    message_queue.put_nowait(parse_map_packet(FIXTURE.read_bytes()))
 
     await _wait_for(lambda: q10_api.map.image_content is not None)
     assert {room.id: room.name for room in q10_api.map.rooms} == {2: "Living Room", 3: "Bedroom"}
@@ -154,12 +151,12 @@ async def test_subscribe_loop_routes_map_push(
 
 async def test_subscribe_loop_routes_trace_push(
     q10_api: Q10PropertiesApi,
-    message_queue: asyncio.Queue[RoborockMessage],
+    message_queue: asyncio.Queue[Q10Message],
 ) -> None:
     """A trace pushed onto the stream is routed to the map trait by the loop."""
     assert not q10_api.map.path
 
-    message_queue.put_nowait(_map_message(TRACE_SESSION_FIXTURE.read_bytes()))
+    message_queue.put_nowait(parse_trace_packet(TRACE_SESSION_FIXTURE.read_bytes()))
 
     await _wait_for(lambda: bool(q10_api.map.path))
     assert q10_api.map.robot_position is not None
