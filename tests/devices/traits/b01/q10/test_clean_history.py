@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from roborock.data.b01_q10.b01_q10_code_mappings import (
@@ -12,22 +10,13 @@ from roborock.data.b01_q10.b01_q10_code_mappings import (
 from roborock.data.b01_q10.b01_q10_containers import Q10CleanRecord
 from roborock.devices.traits.b01.q10 import Q10PropertiesApi
 from roborock.devices.traits.b01.q10.clean_history import CleanHistoryTrait, CleanRecordConverter
-from tests.fixtures.channel_fixtures import FakeChannel
+
+from .conftest import FakeB01Q10Channel
 
 # 12 underscore fields: recordId, startTime, cleanTime, cleanArea, mapLen, pathLen,
 # virtualLen, cleanMode, workMode, cleaningResult, startMethod, collectDustCount.
 RECORD_A = "abc123def456_1781226271_27_19_6692_12053_4_0_2_1_1_1"
 RECORD_B = "def456abc789_1781139871_41_25_7100_18420_5_1_1_0_2_1"
-
-
-@pytest.fixture(name="fake_channel")
-def fake_channel_fixture() -> FakeChannel:
-    return FakeChannel()
-
-
-@pytest.fixture(name="q10_api")
-def q10_api_fixture(fake_channel: FakeChannel) -> Q10PropertiesApi:
-    return Q10PropertiesApi(fake_channel)  # type: ignore[arg-type]
 
 
 @pytest.fixture(name="clean_history")
@@ -178,11 +167,11 @@ def test_update_from_dps_notify_ignores_malformed(clean_history: CleanHistoryTra
     assert [r.record_id for r in clean_history.records] == ["abc123def456"]
 
 
-async def test_refresh_sends_op_list(q10_api: Q10PropertiesApi, fake_channel: FakeChannel) -> None:
+async def test_refresh_sends_op_list(q10_api: Q10PropertiesApi, fake_channel: FakeB01Q10Channel) -> None:
     await q10_api.clean_history.refresh()
 
-    assert len(fake_channel.published_messages) == 1
-    raw_payload = fake_channel.published_messages[0].payload
-    assert raw_payload is not None
-    payload = json.loads(raw_payload.decode())
-    assert payload == {"dps": {"101": {"52": {"op": "list"}}}}
+    assert len(fake_channel.published_commands) == 1
+    assert fake_channel.published_commands[0] == (
+        B01_Q10_DP.COMMON,
+        {"52": {"op": "list"}},
+    )
