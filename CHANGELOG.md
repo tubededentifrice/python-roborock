@@ -2,6 +2,153 @@
 
 <!-- version list -->
 
+## v5.28.0 (2026-07-08)
+
+### Features
+
+- Add better dock feature control
+  ([#867](https://github.com/Python-roborock/python-roborock/pull/867),
+  [`73ba2bf`](https://github.com/Python-roborock/python-roborock/commit/73ba2bf152d1c43b4d46d1e7f397043dd195d046))
+
+
+## v5.27.0 (2026-07-07)
+
+### Documentation
+
+- Add comment explaining dss field in v1_simulator
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+### Features
+
+- Add roborock.testing module for stateful integration testing
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Expose dock_type configuration in V1VacuumSimulator
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Expose in_cleaning, in_returning, charge_status, and dss on V1VacuumSimulator
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Honor publish_side_effect in simulator and raise NotImplementedError in base _handle_publish
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+### Refactoring
+
+- Decouple default product id from device duid and share DEFAULT_PRODUCT_ID constant
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Delete redundant properties from V1VacuumSimulator and update trigger_push_update
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Export and define all simulator state default constants at package level
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Expose raw status and app_init dataclasses on simulator for direct test manipulation
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Inherit FakeChannel from Channel Protocol
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Rename self.servers to self.simulated_devices and restore hardcoded qiCNieZa in mock_data
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Replace FakeUserState with library UserData dataclass on FakeRoborockCloud
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Type simulator consumables state using Consumable dataclass
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Type simulator dnd, clean summary and record using real dataclasses
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Type simulator status, network info and init status using real dataclasses
+  ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+- Update _handle_app_get_init_status to serialize self.app_init and dynamically resolve status_info
+  fields from self.status ([#860](https://github.com/Python-roborock/python-roborock/pull/860),
+  [`c963ad7`](https://github.com/Python-roborock/python-roborock/commit/c963ad79b7d7206dd1b97cd7f377305a67f90364))
+
+
+## v5.26.0 (2026-07-06)
+
+### Documentation
+
+- Add 569 back to the docstring's Q7-divergence list
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Mark fault 12 hw-confirmed (fired at 14% battery, corpus recount)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Mark fault 2 hw-confirmed (bumper held during commanded motion)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Mark fault 407 hw-confirmed (deterministically reproduced: due schedule ignored mid-clean)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Mark fault 46 hw-confirmed (docked with dust bag removed)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Mark fault 5 hw-confirmed (physically ground-truthed brush jams)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Note fault 501 fires per completed task
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Note the error state can carry no fault code (observed live)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Refer to the ss07 fault spec, not the app (review feedback)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+### Features
+
+- Decode Q10 (B01/ss07) dpFault codes into a YXFault map
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Decode Q10 (B01/ss07) dpFault codes with a YXFault enum
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+- Re-add fault 569 as too_frequent_emptying, hw-confirmed (dock refuses a too-soon empty)
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+### Refactoring
+
+- Decouple B01 (Q7/Q10) protocol layer from transport layer
+  ([#859](https://github.com/Python-roborock/python-roborock/pull/859),
+  [`b00d60b`](https://github.com/Python-roborock/python-roborock/commit/b00d60b9f70d6a5da9089e470db60b04437c0b14))
+
+- Type Q10Status.fault as YXFault, mirroring the Q7 fault field
+  ([#863](https://github.com/Python-roborock/python-roborock/pull/863),
+  [`32f9747`](https://github.com/Python-roborock/python-roborock/commit/32f9747b368c4d58a78691a0106a8c9676a07e2c))
+
+
 ## v5.25.0 (2026-07-03)
 
 ### Chores
