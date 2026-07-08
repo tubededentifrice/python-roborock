@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v5.28.0 (2026-07-08)
+
+### Features
+
+- Add better dock feature control
+  ([#867](https://github.com/Python-roborock/python-roborock/pull/867),
+  [`73ba2bf`](https://github.com/Python-roborock/python-roborock/commit/73ba2bf152d1c43b4d46d1e7f397043dd195d046))
+
+
 ## v5.27.0 (2026-07-07)
 
 ### Documentation
