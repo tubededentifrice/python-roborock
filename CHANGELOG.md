@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v5.29.0 (2026-07-12)
+
+### Features
+
+- Truncate large payloads in RoborockMessage __repr__
+  ([#873](https://github.com/Python-roborock/python-roborock/pull/873),
+  [`95460d7`](https://github.com/Python-roborock/python-roborock/commit/95460d77a599613a0eddab3f4db7a36904f894d6))
+
+
 ## v5.28.1 (2026-07-12)
 
 ### Bug Fixes
