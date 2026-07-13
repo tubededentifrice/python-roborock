@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v5.30.0 (2026-07-13)
+
+### Bug Fixes
+
+- Gate dock_error_status on has_dock rather than is_collectable
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+### Documentation
+
+- Document metadata keys in field_metadata and is_field_supported
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+### Features
+
+- Implement device capability metadata for status computed property fields
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+
 ## v5.29.0 (2026-07-12)
 
 ### Features
