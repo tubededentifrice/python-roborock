@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v5.31.1 (2026-07-18)
+
+### Bug Fixes
+
+- Correct reset consumable parameters for strainer and cleaning brush
+  ([#879](https://github.com/Python-roborock/python-roborock/pull/879),
+  [`b11fc49`](https://github.com/Python-roborock/python-roborock/commit/b11fc4984445daa9a1837cef366d8543c3d1b7c8))
+
+### Chores
+
+- Add note about apache-II in CONTRIBUTING.md
+  ([#877](https://github.com/Python-roborock/python-roborock/pull/877),
+  [`a8a5821`](https://github.com/Python-roborock/python-roborock/commit/a8a582192b3ec1c74f9b56c83bda026bd6ec194b))
+
+
 ## v5.31.0 (2026-07-15)
 
 ### Features
