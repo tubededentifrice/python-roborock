@@ -82,7 +82,7 @@ def test_status():
     assert s.home_sec_enable_password == 0
     assert s.adbumper_status == [0, 0, 0]
     assert s.water_shortage_status == 0
-    assert s.dock_type == RoborockDockTypeCode.empty_wash_fill_dock
+    assert s.dock_type == RoborockDockTypeCode.o3_dock
     assert s.dust_collection_status == 0
     assert s.auto_dust_collection == 1
     assert s.avoid_count == 19
@@ -194,7 +194,7 @@ def test_status_v2() -> None:
     assert s.fan_power == 102
     assert s.water_box_mode == 203
     assert s.mop_mode == 300
-    assert s.dock_type == RoborockDockTypeCode.empty_wash_fill_dock
+    assert s.dock_type == RoborockDockTypeCode.o3_dock
     assert s.dock_error_status == RoborockDockErrorCode.ok
     assert s.current_map == 0
 
@@ -268,8 +268,16 @@ def test_qrevo_s5v_dock_type():
     modified_status = STATUS.copy()
     modified_status["dock_type"] = 22
     s = S7MaxVStatus.from_dict(modified_status)
-    assert s.dock_type == RoborockDockTypeCode.qrevo_s5v_dock
+    assert s.dock_type == RoborockDockTypeCode.shell_2e_dock
     assert s.dock_type.value == 22
+
+
+def test_has_am_dss_zero_is_not_missing():
+    modified_status = STATUS.copy()
+    modified_status["dss"] = 0
+
+    assert S7MaxVStatus.from_dict(modified_status).has_am is False
+    assert StatusV2.from_dict(modified_status).has_am is False
 
 
 def test_multi_maps_list_info(snapshot: SnapshotAssertion) -> None:

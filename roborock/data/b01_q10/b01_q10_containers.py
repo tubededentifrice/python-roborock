@@ -23,6 +23,7 @@ from .b01_q10_code_mappings import (
     YXDeviceDustCollectionFrequency,
     YXDeviceState,
     YXFanLevel,
+    YXFault,
     YXStartMethod,
     YXWaterLevel,
 )
@@ -165,7 +166,7 @@ class Q10Status(RoborockBase):
     clean_task_type: YXDeviceCleanTask | None = field(default=None, metadata={"dps": B01_Q10_DP.CLEAN_TASK_TYPE})
     back_type: YXBackType | None = field(default=None, metadata={"dps": B01_Q10_DP.BACK_TYPE})
     cleaning_progress: int | None = field(default=None, metadata={"dps": B01_Q10_DP.CLEAN_PROGRESS})
-    fault: int | None = field(default=None, metadata={"dps": B01_Q10_DP.FAULT})
+    fault: YXFault | None = field(default=None, metadata={"dps": B01_Q10_DP.FAULT})
 
     # Additional state reported in the device's full status dump.
     clean_line: YXCleanLine | None = field(default=None, metadata={"dps": B01_Q10_DP.CLEAN_LINE})
@@ -202,6 +203,11 @@ class Q10Status(RoborockBase):
     side_brush_life: int | None = field(default=None, metadata={"dps": B01_Q10_DP.SIDE_BRUSH_LIFE})
     filter_life: int | None = field(default=None, metadata={"dps": B01_Q10_DP.FILTER_LIFE})
     sensor_life: int | None = field(default=None, metadata={"dps": B01_Q10_DP.SENSOR_LIFE})
+
+    @property
+    def fault_name(self) -> str | None:
+        """Returns the name of the current fault."""
+        return self.fault.value if self.fault is not None else None
 
 
 @dataclass
