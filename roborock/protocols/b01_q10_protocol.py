@@ -11,6 +11,7 @@ from roborock.map.b01_q10_map_parser import (
     Q10MapPacket,
     Q10TracePacket,
     is_map_packet,
+    is_saved_map_packet,
     is_trace_packet,
     parse_map_packet,
     parse_trace_packet,
@@ -113,16 +114,17 @@ Q10Message = Q10DpsUpdate | Q10MapPacket | Q10TracePacket
 def decode_message(message: RoborockMessage) -> Q10Message | None:
     """Decode a pushed Q10 ``RoborockMessage`` into a typed message.
 
-    ``MAP_RESPONSE`` (protocol 301) payloads carry the binary map (``01 01``) or
-    trace (``02 01``) packets, which are parsed by the map parser; any other
-    ``MAP_RESPONSE`` marker is unrecognized and yields ``None``. Every other
-    protocol is treated as a DPS status update.
+    ``MAP_RESPONSE`` (protocol 301) payloads carry the binary current-map
+    (``01 01``) / saved-map (``03 01``) packets or the trace (``02 01``) packet,
+    which are parsed by the map parser; any other ``MAP_RESPONSE`` marker is
+    unrecognized and yields ``None``. Every other protocol is treated as a DPS
+    status update.
 
     Raises ``RoborockException`` if a recognized payload fails to parse.
     """
     if message.protocol == RoborockMessageProtocol.MAP_RESPONSE:
         payload = message.payload or b""
-        if is_map_packet(payload):
+        if is_map_packet(payload) or is_saved_map_packet(payload):
             return parse_map_packet(payload)
         if is_trace_packet(payload):
             return parse_trace_packet(payload)

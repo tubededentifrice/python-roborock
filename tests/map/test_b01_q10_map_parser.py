@@ -13,6 +13,7 @@ from roborock.map.b01_q10_map_parser import (
     Q10Room,
     classify_q10_cell,
     is_map_packet,
+    is_saved_map_packet,
     is_trace_packet,
     lz4_block_decompress,
     parse_map_packet,
@@ -24,6 +25,8 @@ TRACE_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace.bi
 TRACE_MULTI_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_multi.bin"
 # Real 14-point packet captured from an R1 corridor run (full session path).
 TRACE_SESSION_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_session.bin"
+SAVED_MAP_2OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_2obstacles.bin"
+SAVED_MAP_53OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_53obstacles.bin"
 
 
 def _payload() -> bytes:
@@ -390,6 +393,61 @@ def test_carpet_mask_ignored_when_uncompressed_len_mismatches() -> None:
     block = _literal_lz4_block(carpet)
     tail = bytes([0, 0]) + (999).to_bytes(4, "big") + len(block).to_bytes(2, "big") + block
     assert parse_map_packet(FIXTURE.read_bytes() + tail).carpet_mask is None
+
+
+# --- Saved-map obstacle markers ---------------------------------------------
+
+
+def _obstacle_section(obstacles: list[tuple[int, int]]) -> bytes:
+    """Build ``[count: u8]`` followed by signed int16-BE coordinate pairs."""
+    return bytes([len(obstacles)]) + b"".join(
+        int.to_bytes(value & 0xFFFF, 2, "big") for point in obstacles for value in point
+    )
+
+
+def _as_saved_map(payload: bytes) -> bytes:
+    saved = bytearray(payload)
+    saved[:2] = b"\x03\x01"
+    return bytes(saved)
+
+
+def test_saved_map_marker_and_layout_are_recognized() -> None:
+    payload = SAVED_MAP_2OBSTACLES.read_bytes()
+    assert is_saved_map_packet(payload)
+    assert not is_map_packet(payload)
+    packet = parse_map_packet(payload)
+    assert (packet.width, packet.height) == (219, 254)
+    assert packet.map_id == 0
+
+
+def test_parse_saved_map_obstacles_matches_capture() -> None:
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
+    assert [(obstacle.x, obstacle.y) for obstacle in packet.obstacles] == [
+        (-4633, -1946),
+        (-5231, -3852),
+    ]
+
+
+def test_parse_saved_map_dense_obstacles_count() -> None:
+    assert len(parse_map_packet(SAVED_MAP_53OBSTACLES.read_bytes()).obstacles) == 53
+
+
+def test_parse_obstacles_after_valid_carpet_block() -> None:
+    width, height = 8, 6
+    tail = _carpet_tail(width, height, bytes(width * height)) + _obstacle_section([(10, -20), (-30, 40)])
+    packet = parse_map_packet(_as_saved_map(FIXTURE.read_bytes() + tail))
+    assert [(obstacle.x, obstacle.y) for obstacle in packet.obstacles] == [(10, -20), (-30, 40)]
+
+
+def test_current_map_does_not_decode_saved_map_obstacles() -> None:
+    width, height = 8, 6
+    tail = _carpet_tail(width, height, bytes(width * height)) + _obstacle_section([(10, -20)])
+    assert parse_map_packet(FIXTURE.read_bytes() + tail).obstacles == []
+
+
+def test_obstacles_require_a_valid_carpet_block() -> None:
+    tail = bytes([0, 0]) + _obstacle_section([(10, -20)])
+    assert parse_map_packet(_as_saved_map(FIXTURE.read_bytes() + tail)).obstacles == []
 
 
 def _calibrated_map_payload(
