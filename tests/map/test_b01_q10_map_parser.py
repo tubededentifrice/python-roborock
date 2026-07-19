@@ -179,6 +179,16 @@ def test_parser_renders_png_and_room_names() -> None:
     assert parsed.map_data.additional_parameters["room_names"] == {2: "Living Room", 3: "Bedroom"}
 
 
+def test_parse_packet_preserves_decoded_packet_api() -> None:
+    """The existing map trait can render a packet without re-decoding bytes."""
+    packet = parse_map_packet(_payload())
+
+    parsed = B01Q10MapParser().parse_packet(packet)
+
+    assert parsed.image_content is not None
+    assert parsed.map_data is not None
+
+
 def test_parse_rejects_non_map_packet() -> None:
     with pytest.raises(RoborockException, match="not a Q10 map packet"):
         parse_map_packet(b"\x02\x01" + b"\x00" * 40)

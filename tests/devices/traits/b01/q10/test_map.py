@@ -22,7 +22,7 @@ from roborock.protocols.b01_q10_protocol import Q10Message
 from .conftest import FakeB01Q10Channel
 
 FIXTURE = Path("tests/map/testdata/b01_q10_map.bin")
-TRACE_FIXTURE = Path("tests/map/testdata/b01_q10_trace.bin")
+TRACE_FIXTURE = Path("tests/map/testdata/b01_q10_trace_multi.bin")
 
 
 def test_update_from_map_packet_populates_image_and_rooms() -> None:
@@ -50,9 +50,9 @@ def test_update_from_trace_packet_populates_path_and_position() -> None:
 
     trait.update_from_trace_packet(packet)
 
-    assert [(p.x, p.y) for p in trait.path] == [(169, 0)]
+    assert [(p.x, p.y) for p in trait.path] == [(100, 200), (150, 250), (-50, 300)]
     assert trait.robot_position is not None
-    assert (trait.robot_position.x, trait.robot_position.y) == (169, 0)
+    assert (trait.robot_position.x, trait.robot_position.y) == (-50, 300)
     assert len(updates) == 1
 
 
@@ -99,7 +99,7 @@ async def test_await_q10_map_push_returns_true_after_update() -> None:
     )
 
     assert got_trace is True
-    assert [(p.x, p.y) for p in properties.map.path] == [(169, 0)]
+    assert [(p.x, p.y) for p in properties.map.path] == [(100, 200), (150, 250), (-50, 300)]
 
 
 async def test_await_q10_map_push_can_fall_back_to_cached_map_on_timeout() -> None:

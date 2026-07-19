@@ -618,6 +618,14 @@ class B01Q10MapParser:
         """Parse a raw Q10 map packet into a rendered PNG + ``MapData``."""
         return self.parsed_from_packet(parse_map_packet(payload))
 
+    def parse_packet(self, packet: Q10MapPacket) -> ParsedMapData:
+        """Render an already-decoded packet.
+
+        This preserves the public API used by the existing map trait. Callers
+        rendering a modified packet can use :meth:`parsed_from_packet` directly.
+        """
+        return self.parsed_from_packet(packet)
+
     def parsed_from_packet(self, packet: Q10MapPacket) -> ParsedMapData:
         """Render a (possibly erase-modified) packet into a PNG + ``MapData``."""
         image = self._render(packet)
