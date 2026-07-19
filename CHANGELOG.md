@@ -2,6 +2,82 @@
 
 <!-- version list -->
 
+## v5.31.1 (2026-07-18)
+
+### Bug Fixes
+
+- Correct reset consumable parameters for strainer and cleaning brush
+  ([#879](https://github.com/Python-roborock/python-roborock/pull/879),
+  [`b11fc49`](https://github.com/Python-roborock/python-roborock/commit/b11fc4984445daa9a1837cef366d8543c3d1b7c8))
+
+### Chores
+
+- Add note about apache-II in CONTRIBUTING.md
+  ([#877](https://github.com/Python-roborock/python-roborock/pull/877),
+  [`a8a5821`](https://github.com/Python-roborock/python-roborock/commit/a8a582192b3ec1c74f9b56c83bda026bd6ec194b))
+
+
+## v5.31.0 (2026-07-15)
+
+### Features
+
+- Add Q10 integration test and support stream streaming on FakeChannel
+  ([#869](https://github.com/Python-roborock/python-roborock/pull/869),
+  [`502fa42`](https://github.com/Python-roborock/python-roborock/commit/502fa424c4a8fd36b759de8c8557c8665e4d0d13))
+
+- Implement Q10VacuumSimulator and export it
+  ([#869](https://github.com/Python-roborock/python-roborock/pull/869),
+  [`502fa42`](https://github.com/Python-roborock/python-roborock/commit/502fa424c4a8fd36b759de8c8557c8665e4d0d13))
+
+- Implement stateful Q10 device simulator and integration tests
+  ([#869](https://github.com/Python-roborock/python-roborock/pull/869),
+  [`502fa42`](https://github.com/Python-roborock/python-roborock/commit/502fa424c4a8fd36b759de8c8557c8665e4d0d13))
+
+
+## v5.30.0 (2026-07-13)
+
+### Bug Fixes
+
+- Gate dock_error_status on has_dock rather than is_collectable
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+### Documentation
+
+- Document metadata keys in field_metadata and is_field_supported
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+### Features
+
+- Implement device capability metadata for status computed property fields
+  ([#875](https://github.com/Python-roborock/python-roborock/pull/875),
+  [`86acd87`](https://github.com/Python-roborock/python-roborock/commit/86acd874e74c391d85c63483bee02a88b8a2debb))
+
+
+## v5.29.0 (2026-07-12)
+
+### Features
+
+- Truncate large payloads in RoborockMessage __repr__
+  ([#873](https://github.com/Python-roborock/python-roborock/pull/873),
+  [`95460d7`](https://github.com/Python-roborock/python-roborock/commit/95460d77a599613a0eddab3f4db7a36904f894d6))
+
+
+## v5.28.1 (2026-07-12)
+
+### Bug Fixes
+
+- Correct some dock mapping ([#872](https://github.com/Python-roborock/python-roborock/pull/872),
+  [`9e95992`](https://github.com/Python-roborock/python-roborock/commit/9e95992fcfceb70a0e73c86dc819cecc6dc572d1))
+
+### Refactoring
+
+- Use stateful fakes and fixtures in integration tests
+  ([#868](https://github.com/Python-roborock/python-roborock/pull/868),
+  [`89c8074`](https://github.com/Python-roborock/python-roborock/commit/89c80743e2c560f36f56e0c17c85c0d14544f406))
+
+
 ## v5.28.0 (2026-07-08)
 
 ### Features
