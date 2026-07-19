@@ -1,9 +1,8 @@
 """Tests for composing a Q10 map packet + overlays into a rendered result.
 
-The pixel-level machinery (erase blanking, world->pixel overlay placement, path
-drawing, calibration fitting) lives in ``b01_q10_render``; these exercise it with
-explicit calibrations so the geometry is deterministic. The map trait's own tests
-cover the state management that drives this module.
+The pixel-level machinery (erase blanking, world-to-pixel overlay placement,
+path drawing and calibration fitting) lives in ``b01_q10_render``. The map
+trait's own tests cover the state management that drives this module.
 """
 
 import io
@@ -19,13 +18,20 @@ from roborock.map.b01_q10_map_parser import (
     Q10HeaderCalibration,
     Q10MapPacket,
     Q10Point,
+    Q10TracePacket,
     parse_map_packet,
 )
-from roborock.map.b01_q10_overlays import ZONE_TYPE_NO_GO, ZONE_TYPE_NO_MOP, Q10Zone
+from roborock.map.b01_q10_overlays import (
+    ZONE_TYPE_NO_GO,
+    ZONE_TYPE_NO_MOP,
+    ZONE_TYPE_VIRTUAL_WALL,
+    Q10Zone,
+)
 from roborock.map.b01_q10_render import (
     _Q10_RESOLUTIONS,
-    Q10MapRender,
-    draw_path_on_map,
+    Q10MapOverlays,
+    _erased_cells,
+    _project_obstacles,
     render_q10_map,
     solve_q10_calibration,
 )
@@ -37,6 +43,8 @@ CONFIG = B01Q10MapParserConfig()
 # identity-ish calibration used across the geometry tests: world (x, y) -> grid
 # pixel (x, 5 - y) over the fixture's 8x6 grid (top-down, no flip).
 IDENTITY = GridCalibration(resolution=1.0, origin_x=0.0, origin_y=5.0, y_sign=1)
+HEADER = Q10HeaderCalibration(origin_x=0, origin_y=50, resolution=5, charger_x=0, charger_y=0, charger_phi=0)
+TRACE_CALIBRATION = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
 
 
 def _packet() -> Q10MapPacket:
@@ -46,19 +54,13 @@ def _packet() -> Q10MapPacket:
 def _render(
     packet: Q10MapPacket | None = None,
     *,
-    calibration: GridCalibration | None = None,
-    path: list[Q10Point] | None = None,
-    robot_position: Q10Point | None = None,
-    zones: list[Q10Zone] | None = None,
-    virtual_walls: list[Q10Zone] | None = None,
-) -> Q10MapRender:
+    trace: Q10TracePacket | None = None,
+    overlays: Q10MapOverlays | None = None,
+) -> bytes:
     return render_q10_map(
         packet if packet is not None else _packet(),
-        calibration=calibration,
-        path=path or [],
-        robot_position=robot_position,
-        zones=zones or [],
-        virtual_walls=virtual_walls or [],
+        trace,
+        overlays or Q10MapOverlays(),
         config=CONFIG,
     )
 
@@ -74,148 +76,149 @@ def _floor_world_points(layers, cal: GridCalibration, count: int) -> list[Q10Poi
     return [Q10Point(*(int(v) for v in cal.pixel_to_world(px, py))) for px, py in floor[:count]]
 
 
+def _world_vertices(calibration: GridCalibration, pixels: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    vertices = []
+    for px, py in pixels:
+        world_x, world_y = calibration.pixel_to_world(px, py)
+        vertices.append((int(world_x), int(world_y)))
+    return vertices
+
+
+def _calibrated_inputs(*, heading: int = 0) -> tuple[Q10MapPacket, Q10TracePacket]:
+    packet = replace(_packet(), header_calibration=HEADER)
+    pixels = [(1, 1), (6, 1), (1, 2), (6, 2), (2, 3), (5, 3)]
+    points = [Q10Point(*(int(value) for value in TRACE_CALIBRATION.pixel_to_world(px, py))) for px, py in pixels]
+    trace = Q10TracePacket(points=points, heading=heading)
+    return packet, trace
+
+
 def test_render_base_map_without_calibration() -> None:
-    """Without a calibration only the base raster/layers/rooms are produced."""
-    render = _render()
-    assert render.image_content[:8] == b"\x89PNG\r\n\x1a\n"
-    assert render.map_data is not None
-    assert render.calibration is None
-    assert {room.id: room.name for room in render.rooms} == {2: "Living Room", 3: "Bedroom"}
-    assert render.layers.class_counts.get("floor") == 26
-    # Overlays are world-coordinate only, so nothing is placed yet.
-    assert render.map_data.path is None
+    """Without a calibration only the base raster is produced."""
+    image = _render()
+    assert image[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_render_places_path_and_position() -> None:
-    """A calibration places the path + robot position onto MapData in pixels."""
-    path = [Q10Point(1, 2), Q10Point(3, 2)]
-    render = _render(calibration=IDENTITY, path=path, robot_position=Q10Point(3, 2))
-    assert render.map_data.path is not None
-    assert render.map_data.vacuum_position is not None
-    # world (3, 2) -> grid pixel (3, 5 - 2) = (3, 3)
-    assert (render.map_data.vacuum_position.x, render.map_data.vacuum_position.y) == (3.0, 3.0)
+def test_render_draws_path_and_position() -> None:
+    """The map and trace derive calibration and draw the robot position."""
+    packet, trace = _calibrated_inputs()
+    image = _render(packet, trace=trace)
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
+    assert trace.robot_position is not None
+    px, py = calibration.world_to_pixel(trace.robot_position.x, trace.robot_position.y)
+    image_position = (round(px * CONFIG.map_scale), round(py * CONFIG.map_scale))
+    rendered = Image.open(io.BytesIO(image)).convert("RGBA")
+    assert rendered.size == (8 * 4, 6 * 4)
+    assert rendered.getpixel(image_position) == (255, 211, 0, 255)
 
 
-def test_render_places_zones_and_charger() -> None:
-    """Decoded no-go / no-mop zones become pixel-space MapData areas + charger."""
+def test_render_draws_zones_and_virtual_walls() -> None:
+    """Decoded DPS overlays are included in the composed image."""
+    packet, trace = _calibrated_inputs()
     zones = [
         Q10Zone(type=ZONE_TYPE_NO_GO, vertices=[(0, 0), (4, 0), (4, 4), (0, 4)]),
         Q10Zone(type=ZONE_TYPE_NO_MOP, vertices=[(1, 1), (2, 1), (2, 2), (1, 2)]),
     ]
-    render = _render(calibration=IDENTITY, path=[Q10Point(1, 1)], zones=zones)
-    assert len(render.map_data.no_go_areas or []) == 1
-    assert len(render.map_data.no_mopping_areas or []) == 1
-    # charger = path origin in pixels: (1, 5 - 1) = (1, 4)
-    assert render.map_data.charger is not None
-    assert (render.map_data.charger.x, render.map_data.charger.y) == (1.0, 4.0)
+    walls = [Q10Zone(type=ZONE_TYPE_VIRTUAL_WALL, vertices=[(0, 0), (4, 0)])]
+    base = _render(packet, trace=trace)
+    rendered = _render(packet, trace=trace, overlays=Q10MapOverlays(zones=zones, virtual_walls=walls))
+    assert rendered != base
 
 
 def test_render_applies_erase_zones() -> None:
-    """With a calibration, erase-zone cells are blanked from layers + image."""
-    base = _render()
-    before_floor = base.layers.class_counts.get("floor")
-    assert before_floor and before_floor > 0
+    """With a calibration, erase-zone cells are blanked from the image."""
+    packet, trace = _calibrated_inputs()
+    base = _render(packet, trace=trace)
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
 
     # A rectangle covering the whole grid in world coords erases every cell.
-    packet = replace(_packet(), erase_zones=[Q10EraseZone(vertices=[(0, 0), (7, 0), (7, 5), (0, 5)])])
-    render = _render(packet, calibration=IDENTITY)
+    corners = [(-1, -1), (8, -1), (8, 6), (-1, 6)]
+    erase_zone = Q10EraseZone(vertices=_world_vertices(calibration, corners))
+    cells = _erased_cells(packet.layers, [erase_zone], calibration)
+    render = _render(replace(packet, erase_zones=[erase_zone]), trace=trace)
 
-    assert render.layers.class_counts.get("floor", 0) == 0  # all floor erased
-    assert render.image_content != base.image_content  # re-rendered
+    assert len(cells) == packet.layers.width * packet.layers.height
+    assert render != base
 
 
 def test_render_partial_erase() -> None:
     """An erase rectangle only blanks the cells it covers, leaving the rest."""
-    before_floor = _render().layers.class_counts.get("floor", 0)
+    packet, trace = _calibrated_inputs()
+    base = _render(packet, trace=trace)
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
 
-    # Cover only the top two grid rows (pixel y 0..1 -> world y 4..5).
-    packet = replace(_packet(), erase_zones=[Q10EraseZone(vertices=[(0, 4), (7, 4), (7, 5), (0, 5)])])
-    render = _render(packet, calibration=IDENTITY)
+    # Cover only the top two grid rows.
+    corners = [(-1, -1), (8, -1), (8, 2), (-1, 2)]
+    erase_zone = Q10EraseZone(vertices=_world_vertices(calibration, corners))
+    cells = _erased_cells(packet.layers, [erase_zone], calibration)
+    render = _render(replace(packet, erase_zones=[erase_zone]), trace=trace)
 
-    after_floor = render.layers.class_counts.get("floor", 0)
-    assert 0 < after_floor < before_floor  # some, not all, floor removed
-
-
-def test_render_places_obstacles_from_header() -> None:
-    """Obstacle markers are placed via the header origin -- no path calibration.
-
-    Ground-truthed against @andrewlyeats's 2-obstacle capture: header origin
-    (1651, 434) and the /50 obstacle scale put the markers at grid px (72.4, 82.3)
-    and (60.5, 120.4)."""
-    render = _render(parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes()))  # calibration=None
-    obstacles = render.map_data.obstacles
-    assert obstacles is not None and len(obstacles) == 2
-    assert (round(obstacles[0].x, 1), round(obstacles[0].y, 1)) == (72.4, 82.3)
-    assert (round(obstacles[1].x, 1), round(obstacles[1].y, 1)) == (60.5, 120.4)
+    assert 0 < len(cells) < packet.layers.width * packet.layers.height
+    assert render != base
 
 
-def test_render_obstacles_need_usable_header_origin() -> None:
-    """A keepalive header (no origin) leaves the obstacles unplaced."""
+def test_render_draws_saved_map_obstacles_without_trace() -> None:
+    """Saved-map obstacles use their header origin without trace calibration."""
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
+    obstacles = _project_obstacles(packet.obstacles, packet.header_calibration)
+    assert [(round(point.x, 1), round(point.y, 1)) for point in obstacles] == [
+        (72.4, 82.3),
+        (60.5, 120.4),
+    ]
+
+    base = Image.open(io.BytesIO(_render(replace(packet, obstacles=[])))).convert("RGBA")
+    rendered = Image.open(io.BytesIO(_render(packet))).convert("RGBA")
+    first = obstacles[0]
+    pixel = (round(first.x * CONFIG.map_scale), round(first.y * CONFIG.map_scale))
+    assert rendered.getpixel(pixel) != base.getpixel(pixel)
+
+
+def test_render_obstacles_require_usable_header_origin() -> None:
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
     packet = replace(
-        parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes()),
+        packet,
         header_calibration=Q10HeaderCalibration(
-            origin_x=0, origin_y=0, resolution=5, charger_x=0, charger_y=0, charger_phi=0
+            origin_x=0,
+            origin_y=0,
+            resolution=5,
+            charger_x=0,
+            charger_y=0,
+            charger_phi=0,
         ),
     )
-    assert _render(packet).map_data.obstacles is None
+    assert _render(packet) == _render(replace(packet, obstacles=[]))
 
 
-def test_draw_path_on_map_draws_position() -> None:
-    """The robot position is drawn at the mapped pixel."""
-    path = [Q10Point(1, 2), Q10Point(3, 2)]
-    render = _render(calibration=IDENTITY, path=path, robot_position=Q10Point(3, 2))
-    png = draw_path_on_map(
-        render,
-        config=CONFIG,
-        path=path,
-        robot_position=Q10Point(3, 2),
-        robot_heading=None,
-        zones=[],
-        virtual_walls=[],
-        position_color=(255, 211, 0, 255),
-    )
-    img = Image.open(io.BytesIO(png)).convert("RGBA")
-    # world (3, 2) -> grid pixel (3, 3) -> image (12, 12) at scale 4 (no flip).
-    assert img.size == (8 * 4, 6 * 4)
-    assert img.getpixel((12, 12)) == (255, 211, 0, 255)
-
-
-def test_draw_path_on_map_draws_heading_indicator() -> None:
+def test_render_draws_heading_indicator() -> None:
     """A known heading draws a facing tick from the robot marker.
 
     With heading 0 (= +x world) and the identity-ish calibration, the tick
     extends to the right of the robot pixel; with the marker at image (12, 12)
     the tick covers pixels at x > 12 along y == 12.
     """
-    path = [Q10Point(1, 2), Q10Point(3, 2)]
-    render = _render(calibration=IDENTITY, path=path, robot_position=Q10Point(3, 2))
-    png = draw_path_on_map(
-        render,
-        config=CONFIG,
-        path=path,
-        robot_position=Q10Point(3, 2),
-        robot_heading=0,  # facing +x
-        zones=[],
-        virtual_walls=[],
-        position_color=(255, 211, 0, 255),
-    )
-    img = Image.open(io.BytesIO(png)).convert("RGBA")
-    # tick runs +x from the marker (4 * radius = 16 px at scale 4)
-    assert img.getpixel((20, 12)) == (255, 211, 0, 255)
+    packet, trace = _calibrated_inputs(heading=0)
+    image = _render(packet, trace=trace)
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
+    assert trace.robot_position is not None
+    px, py = calibration.world_to_pixel(trace.robot_position.x, trace.robot_position.y)
+    cx = round(px * CONFIG.map_scale)
+    cy = round(py * CONFIG.map_scale)
+    rendered = Image.open(io.BytesIO(image)).convert("RGBA")
+    # Tick runs +x from the marker (4 * radius = 16 px at scale 4).
+    assert rendered.getpixel((cx + 8, cy)) == (255, 211, 0, 255)
     # ...and not behind it (the marker is a small disc; sample well to the left)
-    assert img.getpixel((4, 12)) != (255, 211, 0, 255)
+    assert rendered.getpixel((cx - 8, cy)) != (255, 211, 0, 255)
 
 
 def test_solve_q10_calibration_uses_header_origin_with_short_path() -> None:
     """A grid-frame header origin lets a short path calibrate (origin is exact)."""
-    layers = _render().layers
-    # Header origin in 5 mm units -> pixel origin (0, 5); not a keepalive frame.
-    header = Q10HeaderCalibration(origin_x=0, origin_y=50, resolution=5, charger_x=0, charger_y=0, charger_phi=0)
-    true = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
-    path = _floor_world_points(layers, true, 6)
-    assert len(path) < 20  # far too short for the full origin+resolution fit
+    packet, trace = _calibrated_inputs()
+    assert len(trace.points) < 20  # far too short for the full origin+resolution fit
 
-    cal = solve_q10_calibration(layers, header, path)
+    cal = solve_q10_calibration(packet, trace)
     assert cal is not None
     # Origin comes straight from the header (exact); only the resolution is fit,
     # so it lands on one of the candidates (the exact pick is grid-quantized).
@@ -225,7 +228,6 @@ def test_solve_q10_calibration_uses_header_origin_with_short_path() -> None:
 
 def test_solve_q10_calibration_short_path_without_header_returns_none() -> None:
     """Without a header origin a short path is too sparse for the full fit."""
-    layers = _render().layers
-    true = GridCalibration(resolution=10.0, origin_x=0.0, origin_y=5.0, y_sign=1)
-    path = _floor_world_points(layers, true, 6)
-    assert solve_q10_calibration(layers, None, path) is None
+    packet = _packet()
+    trace = Q10TracePacket(points=_floor_world_points(packet.layers, IDENTITY, 6))
+    assert solve_q10_calibration(packet, trace) is None

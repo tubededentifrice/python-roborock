@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from roborock.data import HomeData, HomeDataDevice, HomeDataProduct, RoborockDockTypeCode, S7MaxVStatus, UserData
+from roborock.data import HomeData, HomeDataDevice, HomeDataProduct, RoborockDockTypeCode, StatusV2, UserData
 from roborock.devices.cache import Cache, DeviceCache, InMemoryCache
 from roborock.devices.device import RoborockDevice
 from roborock.devices.traits import v1
@@ -13,7 +13,7 @@ from tests import mock_data
 
 USER_DATA = UserData.from_dict(mock_data.USER_DATA)
 HOME_DATA = HomeData.from_dict(mock_data.HOME_DATA_RAW)
-STATUS = S7MaxVStatus.from_dict(mock_data.STATUS)
+STATUS = StatusV2.from_dict(mock_data.STATUS)
 
 
 @pytest.fixture(autouse=True, name="channel")
@@ -110,9 +110,9 @@ def device_fixture(
 
 
 @pytest.fixture(name="dock_type_code", autouse=True)
-def dock_type_code_fixture(request: pytest.FixtureRequest) -> RoborockDockTypeCode | None:
+def dock_type_code_fixture(device_info: HomeDataDevice) -> RoborockDockTypeCode | None:
     """Fixture to provide the dock type code for parameterized tests."""
-    return RoborockDockTypeCode.s7_max_ultra_dock
+    return mock_data.PRODUCT_DOCK_TYPE_MAP.get(device_info.product_id, RoborockDockTypeCode.o3_plus_dock)
 
 
 @pytest.fixture(autouse=True)
@@ -120,11 +120,23 @@ async def discover_features_fixture(
     device: RoborockDevice,
     mock_rpc_channel: AsyncMock,
     dock_type_code: RoborockDockTypeCode | None,
+    device_info: HomeDataDevice,
 ) -> None:
     """Fixture to handle device feature discovery."""
     assert device.v1_properties
+
+    new_feature_info_str = device_info.new_feature_set
+    assert new_feature_info_str is not None, f"Device {device_info.name} is missing new_feature_set"
+    new_feature_info = int(new_feature_info_str, 16)
+
     mock_rpc_channel.send_command.side_effect = [
-        [mock_data.APP_GET_INIT_STATUS],
+        [
+            {
+                **mock_data.APP_GET_INIT_STATUS,
+                "new_feature_info_str": new_feature_info_str,
+                "new_feature_info": new_feature_info,
+            }
+        ],
         {
             **mock_data.STATUS,
             "dock_type": dock_type_code,

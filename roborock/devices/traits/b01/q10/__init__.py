@@ -13,7 +13,6 @@ from .button_light import ButtonLightTrait
 from .child_lock import ChildLockTrait
 from .clean_history import CleanHistoryTrait
 from .command import CommandTrait
-from .common import DpsUpdatable
 from .consumable import ConsumableTrait
 from .do_not_disturb import DoNotDisturbTrait
 from .dust_collection import DustCollectionTrait
@@ -100,7 +99,7 @@ class Q10PropertiesApi(Trait):
         self.map = MapContentTrait()
         self.clean_history = CleanHistoryTrait(self.command)
         # Read-model traits updated from the device's DPS push stream.
-        self._updatable_traits: list[DpsUpdatable] = [
+        self._updatable_traits = [
             self.status,
             self.volume,
             self.child_lock,
@@ -109,10 +108,6 @@ class Q10PropertiesApi(Trait):
             self.network_info,
             self.consumable,
             self.clean_history,
-            # The map trait owns the vector-overlay data points (no-go zones /
-            # virtual walls), which arrive as status DPs rather than in the map
-            # packet, so it updates from the DPS stream like any other read-model.
-            self.map,
         ]
         self._subscribe_task: asyncio.Task[None] | None = None
 
@@ -156,8 +151,7 @@ class Q10PropertiesApi(Trait):
         elif isinstance(message, Q10DpsUpdate):
             _LOGGER.debug("Received Q10 status update: %s", message.dps)
             # Notify all read-model traits about the new message; each trait
-            # only updates the fields that it is responsible for (the map trait
-            # picks out the vector-overlay data points it owns).
+            # only updates the fields that it is responsible for.
             for trait in self._updatable_traits:
                 trait.update_from_dps(message.dps)
 

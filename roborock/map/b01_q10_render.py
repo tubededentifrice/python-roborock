@@ -1,15 +1,14 @@
 """Compose a Q10 (B01/ss07) map into a single rendered result.
 
 The :class:`~roborock.map.b01_q10_map_parser.B01Q10MapParser` turns wire bytes
-into a :class:`~roborock.map.b01_q10_map_parser.Q10MapPacket`; this module takes
-that packet plus the *other* inputs the device streams separately -- the cleaning
-path, the vector overlays (no-go / no-mop zones, virtual walls) and a solved
-world<->pixel calibration -- and composes them into one :class:`Q10MapRender` result object
-(image + ``MapData`` + layers).
+into a :class:`~roborock.map.b01_q10_map_parser.Q10MapPacket`; this module
+combines that map-protocol packet with the latest trace-protocol packet and DPS
+overlay snapshot. Calibration, path and position are derived from those source
+objects rather than managed independently by callers.
 
 It exists so the map trait stays about state management: the trait accumulates
 the pushed inputs and calls :func:`render_q10_map` once per change, holding the
-returned object rather than mutating a pile of derived fields itself. All the
+returned image rather than mutating a pile of derived fields itself. All the
 low-level pixel work (erase-zone blanking, world->pixel overlay placement, path
 drawing) and the calibration policy live here, next to the rest of the map code.
 """
@@ -20,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw
-from vacuum_map_parser_base.map_data import Area, MapData, Obstacle, ObstacleDetails, Path, Point, Wall
+from vacuum_map_parser_base.map_data import Area, MapData, Path, Point, Wall
 
 from roborock.exceptions import RoborockException
 
@@ -33,11 +32,11 @@ from .b01_grid_layers import (
 from .b01_q10_map_parser import (
     B01Q10MapParser,
     B01Q10MapParserConfig,
+    Q10EraseZone,
     Q10HeaderCalibration,
     Q10MapPacket,
     Q10Point,
-    Q10Room,
-    decompose_layers,
+    Q10TracePacket,
     erased_packet,
 )
 from .b01_q10_overlays import ZONE_TYPE_NO_GO, ZONE_TYPE_NO_MOP, Q10Zone
@@ -59,106 +58,65 @@ _MIN_CALIBRATION_POINTS = 20
 # a much shorter path suffices to confirm it (early in a clean, not just a dense
 # one). See :func:`solve_calibration_with_origin`.
 _MIN_HEADER_CALIBRATION_POINTS = 4
-
-# Obstacle markers use their own fixed scale: raw obstacle units per grid pixel.
-# Unlike the path (whose resolution is fit against the floor), obstacles decode
-# with a constant /50 around the header origin (which is itself /10). Confirmed by
-# @andrewlyeats on ss07 saved-map (03 01) frames: raw (-4633, -1946) with header
-# origin (1651, 434) lands at grid px (72.4, 82.3) via col = ox/10 + x/50,
-# row = oy/10 - y/50 (row Y-flipped) -- i.e. a GridCalibration with resolution 50
-# around the header's pixel origin.
+# Saved-map obstacle coordinates use this fixed number of raw units per grid
+# pixel around the map header origin, independently of trace calibration.
 _OBSTACLE_UNITS_PER_PIXEL = 50
 
 
-@dataclass
-class Q10MapRender:
-    """The fully composed result of rendering a Q10 map packet.
+@dataclass(frozen=True)
+class Q10MapOverlays:
+    """Latest decoded map-overlay values from the Q10 DPS stream."""
 
-    Built by :func:`render_q10_map` from the packet plus the current path,
-    overlays and calibration, so every derived field is consistent with one set
-    of inputs. Analogous to :class:`~roborock.map.map_parser.ParsedMapData`, but
-    also carrying the separable :attr:`layers` and the :attr:`calibration` used
-    to place the vector overlays.
-    """
-
-    image_content: bytes
-    """The rendered base map (PNG) with erase zones blanked, path not drawn."""
-
-    map_data: MapData
-    """Parsed map data: image metadata, room names, and -- once a calibration is
-    known -- the path / robot position / zones / walls placed in pixel space."""
-
-    layers: GridLayers
-    """Separable map layers (background / wall / floor / per-room) in grid-pixel
-    space, each renderable to a transparent PNG for frontend compositing."""
-
-    rooms: list[Q10Room]
-    """Rooms (segments) reported by the device, with ids and names."""
-
-    calibration: GridCalibration | None
-    """World<->pixel transform used to place the overlays, or ``None`` if no
-    calibration was available (the overlays are then absent from ``map_data``)."""
+    zones: Sequence[Q10Zone] = ()
+    virtual_walls: Sequence[Q10Zone] = ()
 
 
 def render_q10_map(
     packet: Q10MapPacket,
+    trace: Q10TracePacket | None,
+    overlays: Q10MapOverlays,
     *,
-    calibration: GridCalibration | None,
-    path: Sequence[Q10Point],
-    robot_position: Q10Point | None,
-    zones: Sequence[Q10Zone],
-    virtual_walls: Sequence[Q10Zone],
     config: B01Q10MapParserConfig,
-) -> Q10MapRender:
-    """Compose a Q10 map packet and its overlays into a :class:`Q10MapRender`.
+) -> bytes:
+    """Compose the latest map, trace and DPS inputs into one PNG image.
 
-    With a ``calibration`` the erase zones are blanked out of the raster and the
-    path / robot position / restricted zones / virtual walls are placed onto
-    ``map_data`` in pixel space; without one only the base raster is rendered
-    (the overlays are world-coordinate only and can't be placed yet). Raises
-    :class:`RoborockException` if the packet fails to render.
+    Calibration is derived from ``packet`` (layers + header calibration) and
+    ``trace`` (path points). Once calibrated, erase zones are blanked out of the
+    raster and trace/overlay data is projected and drawn in pixel space.
+    Without a usable trace only the base raster is rendered. Raises
+    :class:`RoborockException` if map rendering fails.
     """
     parser = B01Q10MapParser(config)
-    layers = decompose_layers(packet)
+    calibration = solve_q10_calibration(packet, trace)
 
     render_packet = packet
     if calibration is not None:
-        cells = _erased_cells(layers, packet.erase_zones, calibration)
+        cells = _erased_cells(packet.layers, packet.erase_zones, calibration)
         if cells:
-            # Blank the erase-zone cells and re-derive the raster/layers from the
-            # modified packet so the phantom areas disappear (as the app shows).
+            # Blank the erase-zone cells before parsing the raster so phantom
+            # areas disappear (as the app shows).
             render_packet = erased_packet(packet, cells)
-            layers = decompose_layers(render_packet)
 
     parsed = parser.parsed_from_packet(render_packet)
     if parsed.image_content is None or parsed.map_data is None:
         raise RoborockException("Failed to render Q10 map image")
     map_data = parsed.map_data
 
-    if calibration is not None:
-        _place_path(map_data, calibration, path, robot_position)
-        _place_zones(map_data, calibration, path, zones, virtual_walls)
+    if calibration is not None and trace is not None:
+        _place_trace(map_data, calibration, trace)
+        _place_overlays(map_data, calibration, overlays)
+    obstacles = _project_obstacles(packet.obstacles, packet.header_calibration)
 
-    # Obstacle markers carry their own header-anchored scale, so they are placed
-    # straight from the packet header -- independent of whether a path calibration
-    # has been solved (they are known as soon as the saved map arrives).
-    _place_obstacles(map_data, packet.obstacles, packet.header_calibration)
-
-    return Q10MapRender(
-        image_content=parsed.image_content,
-        map_data=map_data,
-        layers=layers,
-        rooms=packet.rooms,
-        calibration=calibration,
-    )
+    if (calibration is not None and trace is not None) or obstacles:
+        return _draw_map_content(parsed.image_content, map_data, obstacles=obstacles, config=config)
+    return parsed.image_content
 
 
 def solve_q10_calibration(
-    layers: GridLayers,
-    header_calibration: Q10HeaderCalibration | None,
-    path: Sequence[Q10Point],
+    packet: Q10MapPacket,
+    trace: Q10TracePacket | None,
 ) -> GridCalibration | None:
-    """Fit the world<->pixel calibration from the current cleaning path.
+    """Derive world-to-pixel calibration from a map and its current trace.
 
     When the map packet's grid-frame header carries a calibration origin (ss07),
     only the resolution is fit -- around that fixed origin -- so a short path
@@ -166,22 +124,24 @@ def solve_q10_calibration(
     the full origin + resolution fit is used, which needs a reasonably dense
     cleaning path. Returns ``None`` if the path is too short/featureless to fit.
     """
-    points: list[tuple[float, float]] = [(point.x, point.y) for point in path]
-    return _calibration_from_header(layers, header_calibration, points) or _calibration_from_fit(layers, points)
+    if trace is None:
+        return None
+    points: list[tuple[float, float]] = [(point.x, point.y) for point in trace.points]
+    return _calibration_from_header(packet, points) or _calibration_from_fit(packet.layers, points)
 
 
 def _calibration_from_header(
-    layers: GridLayers,
-    header_calibration: Q10HeaderCalibration | None,
+    packet: Q10MapPacket,
     points: list[tuple[float, float]],
 ) -> GridCalibration | None:
     """Calibrate around the header-supplied origin (resolution fit to a path)."""
+    header_calibration = packet.header_calibration
     if header_calibration is None or len(points) < _MIN_HEADER_CALIBRATION_POINTS:
         return None
     origin = header_calibration.origin_pixels()
     if origin is None:  # keepalive frame -- no usable origin
         return None
-    return solve_calibration_with_origin(layers, points, origin, resolutions=_Q10_RESOLUTIONS)
+    return solve_calibration_with_origin(packet.layers, points, origin, resolutions=_Q10_RESOLUTIONS)
 
 
 def _calibration_from_fit(layers: GridLayers, points: list[tuple[float, float]]) -> GridCalibration | None:
@@ -191,7 +151,11 @@ def _calibration_from_fit(layers: GridLayers, points: list[tuple[float, float]])
     return solve_calibration(layers, points, resolutions=_Q10_RESOLUTIONS)
 
 
-def _erased_cells(layers: GridLayers, erase_zones: Sequence, calibration: GridCalibration) -> set[int]:
+def _erased_cells(
+    layers: GridLayers,
+    erase_zones: Sequence[Q10EraseZone],
+    calibration: GridCalibration,
+) -> set[int]:
     """Grid-cell indices covered by the erase zones (axis-aligned bbox fill)."""
     if not erase_zones:
         return set()
@@ -209,30 +173,32 @@ def _erased_cells(layers: GridLayers, erase_zones: Sequence, calibration: GridCa
     return cells
 
 
-def _place_path(
+def _place_trace(
     map_data: MapData,
     calibration: GridCalibration,
-    path: Sequence[Q10Point],
-    robot_position: Q10Point | None,
+    trace: Q10TracePacket,
 ) -> None:
-    """Fill ``MapData.path`` / ``vacuum_position`` in grid-pixel coords.
+    """Project trace path, position, heading and charger into pixel space.
 
     Points are stored in grid-pixel space (origin top-left), matching the Q10's
     top-down, un-flipped raster so they line up with the rendered image.
     """
-    pixels = [Point(*calibration.world_to_pixel(point.x, point.y)) for point in path]
+    pixels = [Point(*calibration.world_to_pixel(point.x, point.y)) for point in trace.points]
     map_data.path = Path(len(pixels), 1, 0, [pixels])
+    robot_position = trace.robot_position
     if robot_position is not None:
         px, py = calibration.world_to_pixel(robot_position.x, robot_position.y)
-        map_data.vacuum_position = Point(px, py)
+        # Store the heading in projected image coordinates so drawing does not
+        # need to retain the world-to-pixel calibration.
+        map_data.vacuum_position = Point(px, py, -calibration.y_sign * trace.heading)
+    if pixels:
+        map_data.charger = pixels[0]
 
 
-def _place_zones(
+def _place_overlays(
     map_data: MapData,
     calibration: GridCalibration,
-    path: Sequence[Q10Point],
-    zones: Sequence[Q10Zone],
-    virtual_walls: Sequence[Q10Zone],
+    overlays: Q10MapOverlays,
 ) -> None:
     """Convert world-coordinate zones/walls into pixel-space ``MapData`` layers."""
 
@@ -242,13 +208,13 @@ def _place_zones(
         pts = [calibration.world_to_pixel(x, y) for x, y in zone.vertices]
         return Area(pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], pts[3][0], pts[3][1])
 
-    no_go = [area for zone in zones if zone.type == ZONE_TYPE_NO_GO and (area := to_area(zone))]
-    no_mop = [area for zone in zones if zone.type == ZONE_TYPE_NO_MOP and (area := to_area(zone))]
+    no_go = [area for zone in overlays.zones if zone.type == ZONE_TYPE_NO_GO and (area := to_area(zone))]
+    no_mop = [area for zone in overlays.zones if zone.type == ZONE_TYPE_NO_MOP and (area := to_area(zone))]
     map_data.no_go_areas = no_go or None
     map_data.no_mopping_areas = no_mop or None
 
     walls: list[Wall] = []
-    for zone in virtual_walls:
+    for zone in overlays.virtual_walls:
         if len(zone.vertices) >= 2:
             (x0, y0), (x1, y1) = zone.vertices[0], zone.vertices[1]
             p0 = calibration.world_to_pixel(x0, y0)
@@ -256,71 +222,42 @@ def _place_zones(
             walls.append(Wall(p0[0], p0[1], p1[0], p1[1]))
     map_data.walls = walls or None
 
-    # The robot starts a session at its dock, so the path origin is the charger.
-    if path:
-        cx, cy = calibration.world_to_pixel(path[0].x, path[0].y)
-        map_data.charger = Point(cx, cy)
 
-
-def _place_obstacles(
-    map_data: MapData,
+def _project_obstacles(
     obstacles: Sequence[Q10Point],
     header_calibration: Q10HeaderCalibration | None,
-) -> None:
-    """Place raw obstacle markers onto ``MapData.obstacles`` in grid pixels.
-
-    Obstacles use a fixed scale (:data:`_OBSTACLE_UNITS_PER_PIXEL`) around the
-    header's pixel origin, so -- unlike the path/zones -- they need only the map
-    packet's header, not a fitted path calibration. A keepalive header (no origin)
-    or an empty obstacle list leaves ``MapData.obstacles`` untouched.
-    """
+) -> list[Point]:
+    """Project saved-map obstacles using their fixed header-anchored scale."""
     if not obstacles or header_calibration is None:
-        return
+        return []
     origin = header_calibration.origin_pixels()
-    if origin is None:  # keepalive frame -- no usable origin
-        return
+    if origin is None:
+        return []
     calibration = GridCalibration(
-        resolution=_OBSTACLE_UNITS_PER_PIXEL, origin_x=origin[0], origin_y=origin[1], y_sign=1
+        resolution=_OBSTACLE_UNITS_PER_PIXEL,
+        origin_x=origin[0],
+        origin_y=origin[1],
+        y_sign=1,
     )
-    placed = [
-        Obstacle(*calibration.world_to_pixel(obstacle.x, obstacle.y), ObstacleDetails()) for obstacle in obstacles
-    ]
-    map_data.obstacles = placed or None
+    return [Point(*calibration.world_to_pixel(obstacle.x, obstacle.y)) for obstacle in obstacles]
 
 
-def draw_path_on_map(
-    render: Q10MapRender,
+def _draw_map_content(
+    image_content: bytes,
+    map_data: MapData,
     *,
+    obstacles: Sequence[Point] = (),
     config: B01Q10MapParserConfig,
-    path: Sequence[Q10Point],
-    robot_position: Q10Point | None,
-    robot_heading: int | None,
-    zones: Sequence[Q10Zone],
-    virtual_walls: Sequence[Q10Zone],
     line_color: tuple[int, int, int, int] = (235, 64, 52, 255),
     position_color: tuple[int, int, int, int] = (255, 211, 0, 255),
+    obstacle_color: tuple[int, int, int, int] = (0, 0, 0, 128),
 ) -> bytes:
-    """Draw the session path + robot position + overlays onto the base map (PNG).
-
-    ``render`` must carry a calibration (its :attr:`Q10MapRender.calibration`) --
-    the caller is responsible for solving one first. Returns a fresh PNG; the
-    ``render.image_content`` base raster is left untouched.
-    """
-    calibration = render.calibration
-    if calibration is None:
-        raise RoborockException("No calibration available; a cleaning path must be captured during a clean")
-
+    """Draw projected map content onto a base PNG and return a fresh PNG."""
     scale = config.map_scale
-    base = Image.open(io.BytesIO(render.image_content)).convert("RGBA")
+    base = Image.open(io.BytesIO(image_content)).convert("RGBA")
 
-    def world_to_image(x: float, y: float) -> tuple[float, float]:
-        px, py = calibration.world_to_pixel(x, y)
-        # The ss07 grid renders top-down (no flip), so grid-pixel (px, py) maps
-        # straight to image space, only upscaled by ``scale``.
-        return (px * scale, py * scale)
-
-    def to_image(point: Q10Point) -> tuple[float, float]:
-        return world_to_image(point.x, point.y)
+    def to_image(point: Point) -> tuple[float, float]:
+        return (point.x * scale, point.y * scale)
 
     draw = ImageDraw.Draw(base, "RGBA")
 
@@ -328,51 +265,57 @@ def draw_path_on_map(
     # not drawn here -- the base image already reflects them.
 
     # No-go (blue) and no-mop (magenta) zones beneath the path.
-    for zone in zones:
-        if len(zone.vertices) < 3:
-            continue
-        polygon = [world_to_image(x, y) for x, y in zone.vertices]
-        fill = (0, 120, 255, 70) if zone.type == ZONE_TYPE_NO_GO else (255, 0, 200, 70)
-        outline = (0, 80, 200, 255) if zone.type == ZONE_TYPE_NO_GO else (200, 0, 160, 255)
-        draw.polygon(polygon, fill=fill, outline=outline)
+    for areas, fill, outline in (
+        (map_data.no_go_areas or [], (0, 120, 255, 70), (0, 80, 200, 255)),
+        (map_data.no_mopping_areas or [], (255, 0, 200, 70), (200, 0, 160, 255)),
+    ):
+        for area in areas:
+            polygon = [
+                (area.x0 * scale, area.y0 * scale),
+                (area.x1 * scale, area.y1 * scale),
+                (area.x2 * scale, area.y2 * scale),
+                (area.x3 * scale, area.y3 * scale),
+            ]
+            draw.polygon(polygon, fill=fill, outline=outline)
 
     # Virtual walls (line segments, not polygons) drawn over the zones.
-    for wall in virtual_walls:
-        if len(wall.vertices) < 2:
-            continue
+    for wall in map_data.walls or []:
         draw.line(
-            [world_to_image(x, y) for x, y in wall.vertices[:2]],
+            [(wall.x0 * scale, wall.y0 * scale), (wall.x1 * scale, wall.y1 * scale)],
             fill=(255, 64, 64, 255),
             width=max(2, scale),
         )
 
-    if len(path) >= 2:
-        draw.line([to_image(point) for point in path], fill=line_color, width=max(1, scale // 2))
-    if path:  # path origin == dock / charger
-        dx, dy = to_image(path[0])
+    obstacle_radius = 3 * scale
+    for obstacle in obstacles:
+        ox, oy = to_image(obstacle)
+        draw.ellipse(
+            [ox - obstacle_radius, oy - obstacle_radius, ox + obstacle_radius, oy + obstacle_radius],
+            fill=obstacle_color,
+        )
+
+    for path in map_data.path.path if map_data.path else []:
+        if len(path) >= 2:
+            draw.line([to_image(point) for point in path], fill=line_color, width=max(1, scale // 2))
+    if map_data.charger is not None:
+        dx, dy = to_image(map_data.charger)
         draw.ellipse([dx - scale, dy - scale, dx + scale, dy + scale], outline=(40, 200, 40, 255), width=2)
+    robot_position = map_data.vacuum_position
     if robot_position is not None:
         cx, cy = to_image(robot_position)
         radius = scale
         draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=position_color)
+        robot_heading = robot_position.a
         if robot_heading is not None:
-            # Heading is world-space degrees (0 = +x, +90 = +y). Map a unit
-            # world-space facing vector through the same transform (so the
-            # Y-flip/scale match the marker), then normalize to a fixed
-            # pixel-length tick so it reads at any calibration resolution.
+            # Heading was projected into image coordinates alongside the robot
+            # position, so no calibration state is needed during drawing.
             angle = math.radians(robot_heading)
-            hx, hy = world_to_image(
-                robot_position.x + math.cos(angle),
-                robot_position.y + math.sin(angle),
+            tick = 4 * radius
+            draw.line(
+                [cx, cy, cx + math.cos(angle) * tick, cy + math.sin(angle) * tick],
+                fill=position_color,
+                width=max(1, scale // 2),
             )
-            norm = math.hypot(hx - cx, hy - cy)
-            if norm > 0:
-                tick = 4 * radius
-                draw.line(
-                    [cx, cy, cx + (hx - cx) / norm * tick, cy + (hy - cy) / norm * tick],
-                    fill=position_color,
-                    width=max(1, scale // 2),
-                )
     buffer = io.BytesIO()
     base.save(buffer, format="PNG")
     return buffer.getvalue()

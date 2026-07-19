@@ -1,7 +1,6 @@
-"""Tests for the device-agnostic grid->layers decomposition + Q10 classifier."""
+"""Tests for the device-agnostic grid-to-layers decomposition."""
 
 import io
-from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -15,28 +14,6 @@ from roborock.map.b01_grid_layers import (
     solve_calibration,
     solve_calibration_with_origin,
 )
-from roborock.map.b01_q10_map_parser import (
-    classify_q10_cell,
-    decompose_layers,
-    parse_map_packet,
-)
-
-FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_map.bin"
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (0, "unknown"),
-        (8, LAYER_FLOOR),
-        (12, LAYER_FLOOR),
-        (240, LAYER_FLOOR),
-        (243, LAYER_BACKGROUND),
-        (249, LAYER_WALL),
-    ],
-)
-def test_classify_q10_cell(value: int, expected: str) -> None:
-    assert classify_q10_cell(value) == expected
 
 
 def test_decompose_grid_generic_classifier_and_bbox() -> None:
@@ -97,21 +74,8 @@ def test_render_scale_upsamples() -> None:
     assert Image.open(io.BytesIO(png)).size == (6, 3)
 
 
-def test_decompose_layers_on_q10_fixture() -> None:
-    """The Q10 synthetic fixture splits into floor + per-room layers."""
-    layers = decompose_layers(parse_map_packet(FIXTURE.read_bytes()))
-    assert layers.class_counts.get(LAYER_FLOOR) == 26
-    names = {room.id: room.name for room in layers.rooms}
-    assert names == {2: "Living Room", 3: "Bedroom"}
-    # Each room renders to a valid PNG and only its own pixels are opaque.
-    living = layers.render_room(2, (255, 0, 0, 255))
-    img = Image.open(io.BytesIO(living))
-    opaque = sum(1 for *_rgb, a in img.getdata() if a > 0)
-    assert opaque == next(r.pixel_count for r in layers.rooms if r.id == 2)
-
-
 def test_render_room_unknown_id_raises() -> None:
-    layers = decompose_layers(parse_map_packet(FIXTURE.read_bytes()))
+    layers = decompose_grid(1, 1, b"\x01", [(1, "Room", 1, 1)], lambda _: LAYER_FLOOR)
     with pytest.raises(KeyError):
         layers.render_room(999, (0, 0, 0, 255))
 

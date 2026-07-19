@@ -1,13 +1,17 @@
 """Tests for the Roborock Q10 (B01/ss07) map parser."""
 
+import io
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from roborock.exceptions import RoborockException
+from roborock.map.b01_grid_layers import LAYER_BACKGROUND, LAYER_FLOOR, LAYER_WALL
 from roborock.map.b01_q10_map_parser import (
     B01Q10MapParser,
     Q10Room,
+    classify_q10_cell,
     is_map_packet,
     is_saved_map_packet,
     is_trace_packet,
@@ -21,8 +25,6 @@ TRACE_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace.bi
 TRACE_MULTI_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_multi.bin"
 # Real 14-point packet captured from an R1 corridor run (full session path).
 TRACE_SESSION_FIXTURE = Path(__file__).resolve().parent / "testdata" / "b01_q10_trace_session.bin"
-# Real ss07 saved-map (03 01) frames with obstacle markers, shared by
-# @andrewlyeats (map id zeroed, everything else as-captured).
 SAVED_MAP_2OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_2obstacles.bin"
 SAVED_MAP_53OBSTACLES = Path(__file__).resolve().parent / "testdata" / "b01_q10_saved_map_53obstacles.bin"
 
@@ -123,6 +125,33 @@ def test_parse_map_packet() -> None:
     assert [(r.id, r.raw_name) for r in packet.rooms] == [(2, "rr_living_room"), (3, "bedroom")]
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, "unknown"),
+        (8, LAYER_FLOOR),
+        (12, LAYER_FLOOR),
+        (240, LAYER_FLOOR),
+        (243, LAYER_BACKGROUND),
+        (249, LAYER_WALL),
+    ],
+)
+def test_classify_q10_cell(value: int, expected: str) -> None:
+    assert classify_q10_cell(value) == expected
+
+
+def test_packet_layers_decompose_q10_fixture() -> None:
+    """The Q10 synthetic fixture splits into floor + per-room layers."""
+    layers = parse_map_packet(_payload()).layers
+    assert layers.class_counts.get(LAYER_FLOOR) == 26
+    assert {room.id: room.name for room in layers.rooms} == {2: "Living Room", 3: "Bedroom"}
+
+    living = layers.render_room(2, (255, 0, 0, 255))
+    image = Image.open(io.BytesIO(living))
+    opaque = sum(1 for *_rgb, alpha in image.getdata() if alpha > 0)
+    assert opaque == next(room.pixel_count for room in layers.rooms if room.id == 2)
+
+
 def test_parse_map_packet_allows_zero_room_metadata() -> None:
     """A map can be present before the robot has room segmentation records."""
     grid = bytes([240, 240, 249, 243, 240, 240])
@@ -182,6 +211,16 @@ def test_parser_renders_png_and_room_names() -> None:
     assert parsed.image_content[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic
     assert parsed.map_data is not None
     assert parsed.map_data.additional_parameters["room_names"] == {2: "Living Room", 3: "Bedroom"}
+
+
+def test_parse_packet_preserves_decoded_packet_api() -> None:
+    """The existing map trait can render a packet without re-decoding bytes."""
+    packet = parse_map_packet(_payload())
+
+    parsed = B01Q10MapParser().parse_packet(packet)
+
+    assert parsed.image_content is not None
+    assert parsed.map_data is not None
 
 
 def test_parse_rejects_non_map_packet() -> None:
@@ -356,62 +395,59 @@ def test_carpet_mask_ignored_when_uncompressed_len_mismatches() -> None:
     assert parse_map_packet(FIXTURE.read_bytes() + tail).carpet_mask is None
 
 
-# --- Obstacle markers (saved-map 03 01 frames) -------------------------------
+# --- Saved-map obstacle markers ---------------------------------------------
 
 
 def _obstacle_section(obstacles: list[tuple[int, int]]) -> bytes:
-    """Build an obstacle section: ``[count: u8]`` then int16-BE (x, y) pairs."""
-    out = bytes([len(obstacles)])
-    for x, y in obstacles:
-        out += int.to_bytes(x & 0xFFFF, 2, "big") + int.to_bytes(y & 0xFFFF, 2, "big")
-    return out
+    """Build ``[count: u8]`` followed by signed int16-BE coordinate pairs."""
+    return bytes([len(obstacles)]) + b"".join(
+        int.to_bytes(value & 0xFFFF, 2, "big") for point in obstacles for value in point
+    )
 
 
-def test_saved_map_marker_is_recognized() -> None:
-    """A 03 01 frame is a saved-map packet, distinct from the 01 01 current map."""
+def _as_saved_map(payload: bytes) -> bytes:
+    saved = bytearray(payload)
+    saved[:2] = b"\x03\x01"
+    return bytes(saved)
+
+
+def test_saved_map_marker_and_layout_are_recognized() -> None:
     payload = SAVED_MAP_2OBSTACLES.read_bytes()
     assert is_saved_map_packet(payload)
     assert not is_map_packet(payload)
-    # It still shares the current-map header layout (width/height/rooms decode).
     packet = parse_map_packet(payload)
     assert (packet.width, packet.height) == (219, 254)
-    assert packet.map_id == 0  # zeroed in the shared capture
+    assert packet.map_id == 0
 
 
 def test_parse_saved_map_obstacles_matches_capture() -> None:
-    """The 2-obstacle frame decodes both markers with their captured raw coords."""
     packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
-    assert [(o.x, o.y) for o in packet.obstacles] == [(-4633, -1946), (-5231, -3852)]
+    assert [(obstacle.x, obstacle.y) for obstacle in packet.obstacles] == [
+        (-4633, -1946),
+        (-5231, -3852),
+    ]
 
 
 def test_parse_saved_map_dense_obstacles_count() -> None:
-    """The dense frame decodes all 53 obstacle markers."""
-    packet = parse_map_packet(SAVED_MAP_53OBSTACLES.read_bytes())
-    assert len(packet.obstacles) == 53
+    assert len(parse_map_packet(SAVED_MAP_53OBSTACLES.read_bytes()).obstacles) == 53
 
 
-def test_parse_obstacles_from_synthetic_tail() -> None:
-    """Obstacles decode from the section following a (valid) carpet block."""
-    width, height = 8, 6  # the fixture's dimensions
-    carpet = bytes(width * height)
-    tail = _carpet_tail(width, height, carpet) + _obstacle_section([(10, -20), (-30, 40)])
-    packet = parse_map_packet(FIXTURE.read_bytes() + tail)
-    assert [(o.x, o.y) for o in packet.obstacles] == [(10, -20), (-30, 40)]
+def test_parse_obstacles_after_valid_carpet_block() -> None:
+    width, height = 8, 6
+    tail = _carpet_tail(width, height, bytes(width * height)) + _obstacle_section([(10, -20), (-30, 40)])
+    packet = parse_map_packet(_as_saved_map(FIXTURE.read_bytes() + tail))
+    assert [(obstacle.x, obstacle.y) for obstacle in packet.obstacles] == [(10, -20), (-30, 40)]
 
 
-def test_parse_map_packet_without_obstacles() -> None:
-    """A current-map frame (no obstacle tail) yields no obstacles."""
-    assert parse_map_packet(FIXTURE.read_bytes()).obstacles == []
-
-
-def test_obstacles_ignored_without_valid_carpet_block() -> None:
-    """Obstacles are only located after a valid carpet block; otherwise dropped.
-
-    Without the carpet block to anchor the offset the trailing bytes can't be
-    trusted as an obstacle section, so nothing is decoded (rather than misread)."""
-    # Erase section then obstacle-looking bytes, but no carpet block in between.
-    tail = bytes([0, 0]) + _obstacle_section([(10, -20)])
+def test_current_map_does_not_decode_saved_map_obstacles() -> None:
+    width, height = 8, 6
+    tail = _carpet_tail(width, height, bytes(width * height)) + _obstacle_section([(10, -20)])
     assert parse_map_packet(FIXTURE.read_bytes() + tail).obstacles == []
+
+
+def test_obstacles_require_a_valid_carpet_block() -> None:
+    tail = bytes([0, 0]) + _obstacle_section([(10, -20)])
+    assert parse_map_packet(_as_saved_map(FIXTURE.read_bytes() + tail)).obstacles == []
 
 
 def _calibrated_map_payload(
