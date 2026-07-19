@@ -745,10 +745,9 @@ async def q10_map_with_path(ctx, device_id: str, output_file: str):
     if not got_path:
         click.echo("No live path available (the robot only reports its path while cleaning).")
         return
-    try:
-        image = map_trait.render_path_on_map()
-    except RoborockException as err:
-        click.echo(f"Could not render path on map: {err}")
+    image = map_trait.image_content
+    if image is None:
+        click.echo("No map image content available.")
         return
     with open(output_file, "wb") as f:
         f.write(image)

@@ -22,7 +22,6 @@ from roborock.cli import _await_q10_map_push, cli
 from roborock.data.b01_q10.b01_q10_code_mappings import B01_Q10_DP
 from roborock.devices.traits.b01.q10 import Q10PropertiesApi, create
 from roborock.devices.traits.b01.q10.map import MapContentTrait, MapDpsTrait
-from roborock.exceptions import RoborockException
 from roborock.map.b01_grid_layers import GridCalibration
 from roborock.map.b01_q10_map_parser import (
     Q10HeaderCalibration,
@@ -232,11 +231,14 @@ def test_trace_update_projects_short_path_using_header() -> None:
     trait = MapContentTrait()
     packet = replace(parse_map_packet(FIXTURE.read_bytes()), header_calibration=_USABLE_HEADER)
     trait.update_from_map_packet(packet)
+    base = trait.image_content
+    assert base is not None
     true = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
     assert len(trait.path) < 20  # far too short for the full origin+resolution fit
 
-    assert trait.render_path_on_map()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert trait.image_content is not None
+    assert trait.image_content != base
 
 
 def test_short_trace_without_header_cannot_be_projected() -> None:
@@ -244,36 +246,10 @@ def test_short_trace_without_header_cannot_be_projected() -> None:
     packet = parse_map_packet(FIXTURE.read_bytes())
     trait = MapContentTrait()
     trait.update_from_map_packet(packet)  # the fixture header is a keepalive frame
+    base = trait.image_content
     true = GridCalibration(resolution=10.0, origin_x=0.0, origin_y=5.0, y_sign=1)
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
-    with pytest.raises(RoborockException, match="No calibration available"):
-        trait.render_path_on_map()
-
-
-def test_render_path_on_map_requires_map() -> None:
-    trait = MapContentTrait()
-    with pytest.raises(RoborockException, match="No map available"):
-        trait.render_path_on_map()
-
-
-def test_render_path_on_map_uses_derived_content() -> None:
-    """The renderer draws the already-derived map content as a PNG."""
-    trait = MapContentTrait()
-    packet = replace(parse_map_packet(FIXTURE.read_bytes()), header_calibration=_USABLE_HEADER)
-    trait.update_from_map_packet(packet)
-    true = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
-    trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
-
-    png = trait.render_path_on_map()
-
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-def test_render_path_on_map_without_path_cannot_calibrate() -> None:
-    """A map but no cleaning path -> no calibration -> a clear error."""
-    trait = _trait_with_map()
-    with pytest.raises(RoborockException, match="No calibration available"):
-        trait.render_path_on_map()
+    assert trait.image_content == base
 
 
 # --- Overlays ----------------------------------------------------------------
@@ -287,7 +263,8 @@ def test_load_overlays_places_zones_after_calibration() -> None:
     trait.update_from_map_packet(packet)
     true = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
-    before = trait.render_path_on_map()
+    before = trait.image_content
+    assert before is not None
 
     def rect(zone_type: int, corners: list[tuple[int, int]]) -> bytes:
         out = bytes([zone_type, len(corners)])
@@ -299,7 +276,7 @@ def test_load_overlays_places_zones_after_calibration() -> None:
     map_dps.update_from_dps({B01_Q10_DP.RESTRICTED_ZONE_UP: base64.b64encode(blob).decode()})
 
     assert len(trait.zones) == 1
-    assert trait.render_path_on_map() != before
+    assert trait.image_content != before
 
 
 def test_load_overlays_partial_update_keeps_existing_zones() -> None:

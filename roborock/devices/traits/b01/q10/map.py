@@ -9,7 +9,7 @@ Map-related state arrives on three independent streams:
 ``MapDpsTrait`` owns the low-level DPS read model. ``MapContentTrait`` depends
 on it and combines that state with the latest map/trace packets through the pure
 functions in :mod:`roborock.map.b01_q10_render`. The high-level trait keeps only
-one grouped source snapshot and one replace-whole rendered result; calibration,
+one grouped source snapshot and one replace-whole rendered image; calibration,
 path placement and overlay placement are not independently mutable trait state.
 """
 
@@ -28,7 +28,7 @@ from roborock.map.b01_q10_map_parser import (
     Q10TracePacket,
 )
 from roborock.map.b01_q10_overlays import Q10Zone, parse_virtual_wall_blob, parse_zone_blob
-from roborock.map.b01_q10_render import Q10MapOverlays, Q10MapRender, draw_path_on_map, render_q10_map
+from roborock.map.b01_q10_render import Q10MapOverlays, render_q10_map
 
 from .common import UpdatableTrait
 
@@ -66,7 +66,7 @@ class MapContentTrait(TraitUpdateListener):
 
     Map and trace packet updates replace :attr:`_source`; DPS updates are owned
     by the injected :class:`MapDpsTrait`. Rendering always produces one new
-    :class:`Q10MapRender`, keeping the externally visible fields consistent.
+    image, keeping the externally visible fields consistent.
     """
 
     def __init__(
@@ -79,13 +79,13 @@ class MapContentTrait(TraitUpdateListener):
         self._config = map_parser_config or B01Q10MapParserConfig()
         self._map_dps = map_dps or MapDpsTrait()
         self._source = Q10MapSource()
-        self._render: Q10MapRender | None = None
+        self._image_content: bytes | None = None
         self._map_dps.add_update_listener(self._map_dps_updated)
 
     @property
     def image_content(self) -> bytes | None:
-        """The rendered base map PNG, if a map has been pushed."""
-        return self._render.image_content if self._render else None
+        """The composed map PNG, if a map has been pushed."""
+        return self._image_content
 
     @property
     def rooms(self) -> list[Q10Room]:
@@ -128,7 +128,7 @@ class MapContentTrait(TraitUpdateListener):
         if render is None:
             return
         self._source = source
-        self._render = render
+        self._image_content = render
         self._notify_update()
 
     def update_from_trace_packet(self, packet: Q10TracePacket) -> None:
@@ -138,29 +138,13 @@ class MapContentTrait(TraitUpdateListener):
             self._rebuild()
         self._notify_update()
 
-    def render_path_on_map(
-        self,
-        *,
-        line_color: tuple[int, int, int, int] = (235, 64, 52, 255),
-        position_color: tuple[int, int, int, int] = (255, 211, 0, 255),
-    ) -> bytes:
-        """Return a PNG with the path, robot, zones and walls drawn."""
-        if self._render is None:
-            raise RoborockException("No map available; no map has been pushed yet")
-        return draw_path_on_map(
-            self._render,
-            config=self._config,
-            line_color=line_color,
-            position_color=position_color,
-        )
-
     def _map_dps_updated(self) -> None:
         """Recompose placed overlays after the low-level DPS state changes."""
         if self._source.map_packet is not None:
             self._rebuild()
         self._notify_update()
 
-    def _compose(self, source: Q10MapSource) -> Q10MapRender | None:
+    def _compose(self, source: Q10MapSource) -> bytes | None:
         """Compose a source snapshot, preserving the previous result on error."""
         if source.map_packet is None:
             return None
@@ -179,4 +163,4 @@ class MapContentTrait(TraitUpdateListener):
         """Replace the derived render from the current source snapshot."""
         render = self._compose(self._source)
         if render is not None:
-            self._render = render
+            self._image_content = render
