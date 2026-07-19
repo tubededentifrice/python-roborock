@@ -9,8 +9,10 @@ import io
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
+from roborock.exceptions import RoborockException
 from roborock.map.b01_grid_layers import GridCalibration
 from roborock.map.b01_q10_map_parser import (
     B01Q10MapParserConfig,
@@ -31,6 +33,7 @@ from roborock.map.b01_q10_render import (
     _Q10_RESOLUTIONS,
     Q10MapOverlays,
     Q10MapRender,
+    _erased_cells,
     draw_path_on_map,
     render_q10_map,
     solve_q10_calibration,
@@ -92,13 +95,10 @@ def _calibrated_inputs(*, heading: int = 0) -> tuple[Q10MapPacket, Q10TracePacke
 
 
 def test_render_base_map_without_calibration() -> None:
-    """Without a calibration only the base raster/layers/rooms are produced."""
+    """Without a calibration only the base raster is produced."""
     render = _render()
     assert render.image_content[:8] == b"\x89PNG\r\n\x1a\n"
     assert render.map_data is not None
-    assert render.calibration is None
-    assert {room.id: room.name for room in render.rooms} == {2: "Living Room", 3: "Bedroom"}
-    assert render.layers.class_counts.get("floor") == 26
     # Overlays are world-coordinate only, so nothing is placed yet.
     assert render.map_data.path is None
 
@@ -107,13 +107,14 @@ def test_render_places_path_and_position() -> None:
     """The map and trace derive calibration, path and position together."""
     packet, trace = _calibrated_inputs(heading=45)
     render = _render(packet, trace=trace)
-    assert render.calibration is not None
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
     assert render.map_data.path is not None
     assert render.map_data.vacuum_position is not None
     assert trace.robot_position is not None
-    expected = render.calibration.world_to_pixel(trace.robot_position.x, trace.robot_position.y)
+    expected = calibration.world_to_pixel(trace.robot_position.x, trace.robot_position.y)
     assert (render.map_data.vacuum_position.x, render.map_data.vacuum_position.y) == expected
-    assert render.map_data.vacuum_position.a == 45
+    assert render.map_data.vacuum_position.a == -45
 
 
 def test_render_places_zones_and_charger() -> None:
@@ -128,26 +129,27 @@ def test_render_places_zones_and_charger() -> None:
     assert len(render.map_data.no_go_areas or []) == 1
     assert len(render.map_data.no_mopping_areas or []) == 1
     assert len(render.map_data.walls or []) == 1
-    assert render.calibration is not None
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
     assert render.map_data.charger is not None
-    expected = render.calibration.world_to_pixel(trace.points[0].x, trace.points[0].y)
+    expected = calibration.world_to_pixel(trace.points[0].x, trace.points[0].y)
     assert (render.map_data.charger.x, render.map_data.charger.y) == expected
 
 
 def test_render_applies_erase_zones() -> None:
-    """With a calibration, erase-zone cells are blanked from layers + image."""
+    """With a calibration, erase-zone cells are blanked from the image."""
     packet, trace = _calibrated_inputs()
     base = _render(packet, trace=trace)
-    before_floor = base.layers.class_counts.get("floor")
-    assert before_floor and before_floor > 0
-    assert base.calibration is not None
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
 
     # A rectangle covering the whole grid in world coords erases every cell.
     corners = [(-1, -1), (8, -1), (8, 6), (-1, 6)]
-    erase_zone = Q10EraseZone(vertices=_world_vertices(base.calibration, corners))
+    erase_zone = Q10EraseZone(vertices=_world_vertices(calibration, corners))
+    cells = _erased_cells(packet.layers, [erase_zone], calibration)
     render = _render(replace(packet, erase_zones=[erase_zone]), trace=trace)
 
-    assert render.layers.class_counts.get("floor", 0) == 0  # all floor erased
+    assert len(cells) == packet.layers.width * packet.layers.height
     assert render.image_content != base.image_content  # re-rendered
 
 
@@ -155,16 +157,23 @@ def test_render_partial_erase() -> None:
     """An erase rectangle only blanks the cells it covers, leaving the rest."""
     packet, trace = _calibrated_inputs()
     base = _render(packet, trace=trace)
-    before_floor = base.layers.class_counts.get("floor", 0)
-    assert base.calibration is not None
+    calibration = solve_q10_calibration(packet, trace)
+    assert calibration is not None
 
     # Cover only the top two grid rows.
     corners = [(-1, -1), (8, -1), (8, 2), (-1, 2)]
-    erase_zone = Q10EraseZone(vertices=_world_vertices(base.calibration, corners))
+    erase_zone = Q10EraseZone(vertices=_world_vertices(calibration, corners))
+    cells = _erased_cells(packet.layers, [erase_zone], calibration)
     render = _render(replace(packet, erase_zones=[erase_zone]), trace=trace)
 
-    after_floor = render.layers.class_counts.get("floor", 0)
-    assert 0 < after_floor < before_floor  # some, not all, floor removed
+    assert 0 < len(cells) < packet.layers.width * packet.layers.height
+    assert render.image_content != base.image_content
+
+
+def test_draw_path_on_map_requires_projected_path() -> None:
+    """Drawing fails clearly when the source streams could not calibrate."""
+    with pytest.raises(RoborockException, match="No calibration available"):
+        draw_path_on_map(_render(), config=CONFIG)
 
 
 def test_draw_path_on_map_draws_position() -> None:

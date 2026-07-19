@@ -34,7 +34,6 @@ from .b01_q10_map_parser import (
     B01Q10MapParserConfig,
     Q10EraseZone,
     Q10MapPacket,
-    Q10Room,
     Q10TracePacket,
     erased_packet,
 )
@@ -69,13 +68,12 @@ class Q10MapOverlays:
 
 @dataclass
 class Q10MapRender:
-    """The fully composed result of rendering a Q10 map packet.
+    """The image and projected geometry produced by Q10 map composition.
 
     Built by :func:`render_q10_map` from one map packet, trace packet and DPS
-    overlay snapshot, so every derived field is consistent with one set of
-    source inputs. Analogous to
-    :class:`~roborock.map.map_parser.ParsedMapData`, but also carrying the
-    separable :attr:`layers` and derived :attr:`calibration`.
+    overlay snapshot. Source data and intermediate calibration/layer state stay
+    on their owning packet or inside the renderer rather than being repeated on
+    this result.
     """
 
     image_content: bytes
@@ -84,17 +82,6 @@ class Q10MapRender:
     map_data: MapData
     """Parsed map data: image metadata, room names, and -- once a calibration is
     known -- the path / robot position / zones / walls placed in pixel space."""
-
-    layers: GridLayers
-    """Separable map layers (background / wall / floor / per-room) in grid-pixel
-    space, each renderable to a transparent PNG for frontend compositing."""
-
-    rooms: list[Q10Room]
-    """Rooms (segments) reported by the device, with ids and names."""
-
-    calibration: GridCalibration | None
-    """World<->pixel transform used to place the overlays, or ``None`` if no
-    calibration was available (the overlays are then absent from ``map_data``)."""
 
 
 def render_q10_map(
@@ -113,17 +100,15 @@ def render_q10_map(
     :class:`RoborockException` if map rendering fails.
     """
     parser = B01Q10MapParser(config)
-    layers = packet.layers
     calibration = solve_q10_calibration(packet, trace)
 
     render_packet = packet
     if calibration is not None:
-        cells = _erased_cells(layers, packet.erase_zones, calibration)
+        cells = _erased_cells(packet.layers, packet.erase_zones, calibration)
         if cells:
-            # Blank the erase-zone cells and re-derive the raster/layers from the
-            # modified packet so the phantom areas disappear (as the app shows).
+            # Blank the erase-zone cells before parsing the raster so phantom
+            # areas disappear (as the app shows).
             render_packet = erased_packet(packet, cells)
-            layers = render_packet.layers
 
     parsed = parser.parsed_from_packet(render_packet)
     if parsed.image_content is None or parsed.map_data is None:
@@ -134,13 +119,7 @@ def render_q10_map(
         _place_trace(map_data, calibration, trace)
         _place_overlays(map_data, calibration, overlays)
 
-    return Q10MapRender(
-        image_content=parsed.image_content,
-        map_data=map_data,
-        layers=layers,
-        rooms=packet.rooms,
-        calibration=calibration,
-    )
+    return Q10MapRender(image_content=parsed.image_content, map_data=map_data)
 
 
 def solve_q10_calibration(
@@ -219,7 +198,9 @@ def _place_trace(
     robot_position = trace.robot_position
     if robot_position is not None:
         px, py = calibration.world_to_pixel(robot_position.x, robot_position.y)
-        map_data.vacuum_position = Point(px, py, trace.heading)
+        # Store the heading in projected image coordinates so drawing does not
+        # need to retain the world-to-pixel calibration.
+        map_data.vacuum_position = Point(px, py, -calibration.y_sign * trace.heading)
     if pixels:
         map_data.charger = pixels[0]
 
@@ -261,11 +242,10 @@ def draw_path_on_map(
 ) -> bytes:
     """Draw the projected ``MapData`` content onto the base map PNG.
 
-    ``render`` must carry its derived calibration. Returns a fresh PNG; the base
-    raster in :attr:`Q10MapRender.image_content` is left untouched.
+    Returns a fresh PNG; the base raster in
+    :attr:`Q10MapRender.image_content` is left untouched.
     """
-    calibration = render.calibration
-    if calibration is None:
+    if render.map_data.path is None:
         raise RoborockException("No calibration available; a cleaning path must be captured during a clean")
 
     scale = config.map_scale
@@ -314,21 +294,15 @@ def draw_path_on_map(
         draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=position_color)
         robot_heading = robot_position.a
         if robot_heading is not None:
-            # Heading is world-space degrees (0 = +x, +90 = +y). Map a unit
-            # world-space facing vector through the same transform (so the
-            # Y-flip/scale match the marker), then normalize to a fixed
-            # pixel-length tick so it reads at any calibration resolution.
+            # Heading was projected into image coordinates alongside the robot
+            # position, so no calibration state is needed during drawing.
             angle = math.radians(robot_heading)
-            dx = math.cos(angle) / calibration.resolution
-            dy = -calibration.y_sign * math.sin(angle) / calibration.resolution
-            norm = math.hypot(dx, dy)
-            if norm > 0:
-                tick = 4 * radius
-                draw.line(
-                    [cx, cy, cx + dx / norm * tick, cy + dy / norm * tick],
-                    fill=position_color,
-                    width=max(1, scale // 2),
-                )
+            tick = 4 * radius
+            draw.line(
+                [cx, cy, cx + math.cos(angle) * tick, cy + math.sin(angle) * tick],
+                fill=position_color,
+                width=max(1, scale // 2),
+            )
     buffer = io.BytesIO()
     base.save(buffer, format="PNG")
     return buffer.getvalue()
