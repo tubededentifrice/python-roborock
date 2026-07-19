@@ -64,13 +64,6 @@ def classify_q10_cell(value: int) -> str:
     return LAYER_FLOOR
 
 
-def decompose_layers(packet: "Q10MapPacket") -> GridLayers:
-    """Split a parsed Q10 map packet into separable grid-pixel layers."""
-    rooms = [(room.id, room.name, room.pixel_value, room.pixel_count) for room in packet.rooms]
-    # The ss07 grid is stored top-down (row 0 = top), so no display flip is applied.
-    return decompose_grid(packet.width, packet.height, packet.grid, rooms, classify_q10_cell, flip=False)
-
-
 MAP_PACKET_MARKER = b"\x01\x01"
 TRACE_PACKET_MARKER = b"\x02\x01"
 
@@ -201,6 +194,13 @@ class Q10MapPacket:
     """Carpet mask decoded from the packet tail: a full ``width*height`` grid in
     the same (top-down) pixel space as :attr:`grid`, where a non-zero cell is
     carpet (the value is the carpet kind). ``None`` if the packet carried none."""
+
+    @property
+    def layers(self) -> GridLayers:
+        """Split the occupancy grid into separable grid-pixel layers."""
+        rooms = [(room.id, room.name, room.pixel_value, room.pixel_count) for room in self.rooms]
+        # The ss07 grid is stored top-down (row 0 = top), so no display flip is applied.
+        return decompose_grid(self.width, self.height, self.grid, rooms, classify_q10_cell, flip=False)
 
 
 @dataclass

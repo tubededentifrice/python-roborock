@@ -1,13 +1,17 @@
 """Tests for the Roborock Q10 (B01/ss07) map parser."""
 
+import io
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from roborock.exceptions import RoborockException
+from roborock.map.b01_grid_layers import LAYER_BACKGROUND, LAYER_FLOOR, LAYER_WALL
 from roborock.map.b01_q10_map_parser import (
     B01Q10MapParser,
     Q10Room,
+    classify_q10_cell,
     is_map_packet,
     is_trace_packet,
     lz4_block_decompress,
@@ -116,6 +120,33 @@ def test_parse_map_packet() -> None:
     assert packet.map_id == 0x01020304
     assert len(packet.grid) == packet.width * packet.height
     assert [(r.id, r.raw_name) for r in packet.rooms] == [(2, "rr_living_room"), (3, "bedroom")]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, "unknown"),
+        (8, LAYER_FLOOR),
+        (12, LAYER_FLOOR),
+        (240, LAYER_FLOOR),
+        (243, LAYER_BACKGROUND),
+        (249, LAYER_WALL),
+    ],
+)
+def test_classify_q10_cell(value: int, expected: str) -> None:
+    assert classify_q10_cell(value) == expected
+
+
+def test_packet_layers_decompose_q10_fixture() -> None:
+    """The Q10 synthetic fixture splits into floor + per-room layers."""
+    layers = parse_map_packet(_payload()).layers
+    assert layers.class_counts.get(LAYER_FLOOR) == 26
+    assert {room.id: room.name for room in layers.rooms} == {2: "Living Room", 3: "Bedroom"}
+
+    living = layers.render_room(2, (255, 0, 0, 255))
+    image = Image.open(io.BytesIO(living))
+    opaque = sum(1 for *_rgb, alpha in image.getdata() if alpha > 0)
+    assert opaque == next(room.pixel_count for room in layers.rooms if room.id == 2)
 
 
 def test_parse_map_packet_allows_zero_room_metadata() -> None:

@@ -24,6 +24,10 @@ def _rect(zone_type: int, corners: list[tuple[int, int]]) -> bytes:
     return out
 
 
+def _encoded(blob: bytes) -> str:
+    return base64.b64encode(blob).decode()
+
+
 def test_zone_type_constants() -> None:
     """ss07 + ioBroker: 0 no-go, 1 virtual wall, 2 no-mop, 3 threshold."""
     assert (ZONE_TYPE_NO_GO, ZONE_TYPE_VIRTUAL_WALL, ZONE_TYPE_NO_MOP, ZONE_TYPE_THRESHOLD) == (0, 1, 2, 3)
@@ -33,14 +37,14 @@ def test_parse_zone_blob_distinguishes_no_mop_and_threshold() -> None:
     """A no-mop (2) and a door-threshold (3) zone keep distinct types."""
     no_mop = _rect(ZONE_TYPE_NO_MOP, [(0, 0), (10, 0), (10, 10), (0, 10)])
     threshold = _rect(ZONE_TYPE_THRESHOLD, [(20, 20), (30, 20), (30, 22), (20, 22)])
-    zones = parse_zone_blob(_blob(1, [no_mop, threshold]))
+    zones = parse_zone_blob(_encoded(_blob(1, [no_mop, threshold])))
     assert [z.type for z in zones] == [ZONE_TYPE_NO_MOP, ZONE_TYPE_THRESHOLD]
 
 
 def test_parse_zone_blob_two_typed_rectangles() -> None:
     rect_a = _rect(ZONE_TYPE_NO_GO, [(0, 0), (10, 0), (10, 10), (0, 10)])
     rect_b = _rect(ZONE_TYPE_NO_MOP, [(-5, -5), (5, -5), (5, 5), (-5, 5)])
-    zones = parse_zone_blob(_blob(1, [rect_a, rect_b]))
+    zones = parse_zone_blob(_encoded(_blob(1, [rect_a, rect_b])))
     assert [z.type for z in zones] == [ZONE_TYPE_NO_GO, ZONE_TYPE_NO_MOP]
     assert zones[0].vertices == [(0, 0), (10, 0), (10, 10), (0, 10)]
     assert zones[1].vertices == [(-5, -5), (5, -5), (5, 5), (-5, 5)]  # signed coords
@@ -48,29 +52,28 @@ def test_parse_zone_blob_two_typed_rectangles() -> None:
 
 def test_parse_zone_blob_accepts_base64() -> None:
     blob = _blob(1, [_rect(ZONE_TYPE_NO_GO, [(1, 2), (3, 4), (5, 6), (7, 8)])])
-    zones = parse_zone_blob(base64.b64encode(blob).decode())
+    zones = parse_zone_blob(_encoded(blob))
     assert len(zones) == 1 and zones[0].vertices[2] == (5, 6)
 
 
 def test_parse_zone_blob_empty_variants() -> None:
     assert parse_zone_blob(None) == []
-    assert parse_zone_blob(b"\x00") == []  # device's "no zones" sentinel
     assert parse_zone_blob("AA==") == []  # base64 of 0x00
-    assert parse_zone_blob(bytes([1, 0, 0])) == []  # version=1, count=0
+    assert parse_zone_blob("AQAA") == []  # version=1, count=0
 
 
 def test_parse_zone_blob_skips_malformed_record() -> None:
     # vertex_count claims 9 verts (needs 38 bytes) but record is only 18 -> skipped.
     bad = bytes([ZONE_TYPE_NO_GO, 9]) + b"\x00" * 16
     good = _rect(ZONE_TYPE_NO_GO, [(1, 1), (2, 2), (3, 3), (4, 4)])
-    zones = parse_zone_blob(_blob(1, [bad, good]))
+    zones = parse_zone_blob(_encoded(_blob(1, [bad, good])))
     assert len(zones) == 1 and zones[0].vertices[0] == (1, 1)
 
 
 def test_parse_zone_blob_real_record_size_inferred() -> None:
     """Record size is inferred from total/count (real device uses 38)."""
     rect = _rect(ZONE_TYPE_NO_GO, [(100, 200), (300, 200), (300, 50), (100, 50)])
-    zones = parse_zone_blob(_blob(1, [rect], record_size=38))
+    zones = parse_zone_blob(_encoded(_blob(1, [rect], record_size=38)))
     assert len(zones) == 1 and zones[0].vertices[0] == (100, 200)
 
 
@@ -148,7 +151,6 @@ def test_parse_virtual_wall_blob_real_rdc_two_walls() -> None:
 
 def test_parse_virtual_wall_blob_empty_variants() -> None:
     assert parse_virtual_wall_blob(None) == []
-    assert parse_virtual_wall_blob(b"\x00") == []  # device's "no walls" sentinel
     assert parse_virtual_wall_blob("AA==") == []  # base64 of 0x00
 
 
@@ -156,14 +158,14 @@ def test_parse_virtual_wall_blob_multiple_walls() -> None:
     """Two walls back-to-back; each is a separate 8-byte (x, y) record."""
     wall_a = bytes.fromhex("000a0014001e0028")  # (x,y)=(10,20)->(30,40)
     wall_b = bytes.fromhex("fffb0005fff6000a")  # (x,y)=(-5,5)->(-10,10)
-    walls = parse_virtual_wall_blob(bytes([2]) + wall_a + wall_b)
+    walls = parse_virtual_wall_blob(_encoded(bytes([2]) + wall_a + wall_b))
     assert [w.vertices for w in walls] == [[(10, 20), (30, 40)], [(-5, 5), (-10, 10)]]
 
 
 def test_parse_virtual_wall_blob_truncated_record_dropped() -> None:
     """A trailing record shorter than 8 bytes is dropped, not misread."""
     blob = bytes([2]) + bytes([0x00, 0x0A, 0x00, 0x14, 0x00, 0x1E, 0x00, 0x28]) + b"\x00\x00"
-    walls = parse_virtual_wall_blob(blob)
+    walls = parse_virtual_wall_blob(_encoded(blob))
     assert [w.vertices for w in walls] == [[(10, 20), (30, 40)]]
 
 

@@ -27,6 +27,7 @@ so callers can route polygons to the right ``MapData`` layer.
 """
 
 import base64
+import binascii
 from dataclasses import dataclass, field
 
 _DEFAULT_RECORD_SIZE = 38  # 2-byte record header + up to 9 (x, y) int16 pairs
@@ -40,25 +41,23 @@ class Q10Zone:
     vertices: list[tuple[int, int]] = field(default_factory=list)
 
 
-def _as_bytes(data: bytes | str | None) -> bytes:
+def _decode_blob(data: str | None) -> bytes:
     if data is None:
         return b""
-    if isinstance(data, bytes):
-        return data
     try:
         return base64.b64decode(data + "=" * (-len(data) % 4))
-    except (ValueError, base64.binascii.Error):  # type: ignore[attr-defined]
+    except (ValueError, binascii.Error):
         return b""
 
 
-def parse_zone_blob(data: bytes | str | None) -> list[Q10Zone]:
+def parse_zone_blob(data: str | None) -> list[Q10Zone]:
     """Decode a Q10 zone/wall overlay blob into a list of :class:`Q10Zone`.
 
-    Accepts the raw bytes or the base64 string straight from the data point.
-    Returns ``[]`` for empty/absent/unparsable blobs (the device sends a single
-    ``0x00`` byte when there are none).
+    Accepts the base64 string straight from the data point. Returns ``[]`` for
+    empty/absent/unparsable blobs (the device sends a single ``0x00`` byte when
+    there are none).
     """
-    raw = _as_bytes(data)
+    raw = _decode_blob(data)
     if len(raw) < 2:
         return []
     count = raw[1]
@@ -94,7 +93,7 @@ def parse_zone_blob(data: bytes | str | None) -> list[Q10Zone]:
 _WALL_RECORD_SIZE = 8  # two (x, y) int16-BE endpoints
 
 
-def parse_virtual_wall_blob(data: bytes | str | None) -> list[Q10Zone]:
+def parse_virtual_wall_blob(data: str | None) -> list[Q10Zone]:
     """Decode a Q10 virtual-wall overlay blob (``dpVirtualWallUp`` 57).
 
     Virtual walls use a *different framing* from the restricted-zone DPs handled
@@ -109,9 +108,9 @@ def parse_virtual_wall_blob(data: bytes | str | None) -> list[Q10Zone]:
     can place them onto the map through the same
     :class:`~roborock.map.b01_grid_layers.GridCalibration` as the zones.
 
-    Accepts raw bytes or the base64 string straight from the data point. Returns
-    ``[]`` for empty/absent/unparsable blobs (the device sends a single ``0x00``
-    byte -- base64 ``AA==`` -- when there are none).
+    Accepts the base64 string straight from the data point. Returns ``[]`` for
+    empty/absent/unparsable blobs (the device sends a single ``0x00`` byte --
+    base64 ``AA==`` -- when there are none).
 
     The axis order was confirmed against the app: a horizontal wall drawn below
     a room reads back with x varying and y constant (and the wide RDC no-go zone
@@ -119,7 +118,7 @@ def parse_virtual_wall_blob(data: bytes | str | None) -> list[Q10Zone]:
     the wall axes to ``(y, x)`` -- following a misreading of PR #850's notes --
     which placed every wall transposed 90 degrees from where it was drawn.
     """
-    raw = _as_bytes(data)
+    raw = _decode_blob(data)
     if len(raw) < 1:
         return []
     count = raw[0]
