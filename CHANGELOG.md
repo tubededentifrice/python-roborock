@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v5.32.0 (2026-07-19)
+
+### Bug Fixes
+
+- Preserve Q10 decoded packet API
+  ([#881](https://github.com/Python-roborock/python-roborock/pull/881),
+  [`d2b6822`](https://github.com/Python-roborock/python-roborock/commit/d2b6822844eb7e3bdda21cbb89c8376eea53d5f9))
+
+### Chores
+
+- Limit aiohttp for dev ([#878](https://github.com/Python-roborock/python-roborock/pull/878),
+  [`031b9e2`](https://github.com/Python-roborock/python-roborock/commit/031b9e2ad9ec36ebf59ae0c03b7edbe63ed71999))
+
+### Features
+
+- Decode Q10 map geometry metadata
+  ([#881](https://github.com/Python-roborock/python-roborock/pull/881),
+  [`d2b6822`](https://github.com/Python-roborock/python-roborock/commit/d2b6822844eb7e3bdda21cbb89c8376eea53d5f9))
+
+
 ## v5.31.1 (2026-07-18)
 
 ### Bug Fixes
