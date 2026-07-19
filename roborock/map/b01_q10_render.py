@@ -8,7 +8,7 @@ objects rather than managed independently by callers.
 
 It exists so the map trait stays about state management: the trait accumulates
 the pushed inputs and calls :func:`render_q10_map` once per change, holding the
-returned object rather than mutating a pile of derived fields itself. All the
+returned image rather than mutating a pile of derived fields itself. All the
 low-level pixel work (erase-zone blanking, world->pixel overlay placement, path
 drawing) and the calibration policy live here, next to the rest of the map code.
 """
@@ -66,36 +66,18 @@ class Q10MapOverlays:
     virtual_walls: Sequence[Q10Zone] = ()
 
 
-@dataclass
-class Q10MapRender:
-    """The image and projected geometry produced by Q10 map composition.
-
-    Built by :func:`render_q10_map` from one map packet, trace packet and DPS
-    overlay snapshot. Source data and intermediate calibration/layer state stay
-    on their owning packet or inside the renderer rather than being repeated on
-    this result.
-    """
-
-    image_content: bytes
-    """The rendered base map (PNG) with erase zones blanked, path not drawn."""
-
-    map_data: MapData
-    """Parsed map data: image metadata, room names, and -- once a calibration is
-    known -- the path / robot position / zones / walls placed in pixel space."""
-
-
 def render_q10_map(
     packet: Q10MapPacket,
     trace: Q10TracePacket | None,
     overlays: Q10MapOverlays,
     *,
     config: B01Q10MapParserConfig,
-) -> Q10MapRender:
-    """Compose the latest map, trace and DPS inputs into a render.
+) -> bytes:
+    """Compose the latest map, trace and DPS inputs into one PNG image.
 
     Calibration is derived from ``packet`` (layers + header calibration) and
     ``trace`` (path points). Once calibrated, erase zones are blanked out of the
-    raster and trace/overlay data is projected into ``map_data`` pixel space.
+    raster and trace/overlay data is projected and drawn in pixel space.
     Without a usable trace only the base raster is rendered. Raises
     :class:`RoborockException` if map rendering fails.
     """
@@ -118,8 +100,9 @@ def render_q10_map(
     if calibration is not None and trace is not None:
         _place_trace(map_data, calibration, trace)
         _place_overlays(map_data, calibration, overlays)
+        return _draw_map_content(parsed.image_content, map_data, config=config)
 
-    return Q10MapRender(image_content=parsed.image_content, map_data=map_data)
+    return parsed.image_content
 
 
 def solve_q10_calibration(
@@ -233,23 +216,17 @@ def _place_overlays(
     map_data.walls = walls or None
 
 
-def draw_path_on_map(
-    render: Q10MapRender,
+def _draw_map_content(
+    image_content: bytes,
+    map_data: MapData,
     *,
     config: B01Q10MapParserConfig,
     line_color: tuple[int, int, int, int] = (235, 64, 52, 255),
     position_color: tuple[int, int, int, int] = (255, 211, 0, 255),
 ) -> bytes:
-    """Draw the projected ``MapData`` content onto the base map PNG.
-
-    Returns a fresh PNG; the base raster in
-    :attr:`Q10MapRender.image_content` is left untouched.
-    """
-    if render.map_data.path is None:
-        raise RoborockException("No calibration available; a cleaning path must be captured during a clean")
-
+    """Draw projected map content onto a base PNG and return a fresh PNG."""
     scale = config.map_scale
-    base = Image.open(io.BytesIO(render.image_content)).convert("RGBA")
+    base = Image.open(io.BytesIO(image_content)).convert("RGBA")
 
     def to_image(point: Point) -> tuple[float, float]:
         return (point.x * scale, point.y * scale)
@@ -261,8 +238,8 @@ def draw_path_on_map(
 
     # No-go (blue) and no-mop (magenta) zones beneath the path.
     for areas, fill, outline in (
-        (render.map_data.no_go_areas or [], (0, 120, 255, 70), (0, 80, 200, 255)),
-        (render.map_data.no_mopping_areas or [], (255, 0, 200, 70), (200, 0, 160, 255)),
+        (map_data.no_go_areas or [], (0, 120, 255, 70), (0, 80, 200, 255)),
+        (map_data.no_mopping_areas or [], (255, 0, 200, 70), (200, 0, 160, 255)),
     ):
         for area in areas:
             polygon = [
@@ -274,20 +251,20 @@ def draw_path_on_map(
             draw.polygon(polygon, fill=fill, outline=outline)
 
     # Virtual walls (line segments, not polygons) drawn over the zones.
-    for wall in render.map_data.walls or []:
+    for wall in map_data.walls or []:
         draw.line(
             [(wall.x0 * scale, wall.y0 * scale), (wall.x1 * scale, wall.y1 * scale)],
             fill=(255, 64, 64, 255),
             width=max(2, scale),
         )
 
-    for path in render.map_data.path.path if render.map_data.path else []:
+    for path in map_data.path.path if map_data.path else []:
         if len(path) >= 2:
             draw.line([to_image(point) for point in path], fill=line_color, width=max(1, scale // 2))
-    if render.map_data.charger is not None:
-        dx, dy = to_image(render.map_data.charger)
+    if map_data.charger is not None:
+        dx, dy = to_image(map_data.charger)
         draw.ellipse([dx - scale, dy - scale, dx + scale, dy + scale], outline=(40, 200, 40, 255), width=2)
-    robot_position = render.map_data.vacuum_position
+    robot_position = map_data.vacuum_position
     if robot_position is not None:
         cx, cy = to_image(robot_position)
         radius = scale
