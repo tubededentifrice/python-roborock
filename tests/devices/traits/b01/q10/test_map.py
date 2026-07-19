@@ -216,18 +216,19 @@ async def test_subscribe_loop_routes_trace_push(
     assert q10_api.map.robot_position is not None
 
 
-# --- Calibration + rendering -------------------------------------------------
+# --- Source composition + rendering ------------------------------------------
 
 
-def test_trace_without_map_has_no_calibration() -> None:
-    """No map -> no calibration, even with a path pushed."""
+def test_trace_without_map_is_retained_without_rendering() -> None:
+    """A trace is retained even when no map is available to render yet."""
     trait = MapContentTrait()
     trait.update_from_trace_packet(Q10TracePacket(points=[Q10Point(i, 0) for i in range(30)]))
-    assert trait.calibration is None
+    assert len(trait.path) == 30
+    assert trait.image_content is None
 
 
-def test_trace_update_derives_calibration_from_map_and_short_path() -> None:
-    """A trace update derives calibration from the current map and trace."""
+def test_trace_update_projects_short_path_using_header() -> None:
+    """A map header and short trace are sufficient to render a path."""
     trait = MapContentTrait()
     packet = replace(parse_map_packet(FIXTURE.read_bytes()), header_calibration=_USABLE_HEADER)
     trait.update_from_map_packet(packet)
@@ -235,20 +236,18 @@ def test_trace_update_derives_calibration_from_map_and_short_path() -> None:
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
     assert len(trait.path) < 20  # far too short for the full origin+resolution fit
 
-    cal = trait.calibration
-
-    assert cal is not None
-    assert (cal.origin_x, cal.origin_y) == (0.0, 5.0)  # straight from the header
+    assert trait.render_path_on_map()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_short_trace_without_header_does_not_calibrate() -> None:
-    """Without a header origin a short path is still too sparse for the full fit."""
+def test_short_trace_without_header_cannot_be_projected() -> None:
+    """Without a header origin a short trace cannot be placed on the map."""
     packet = parse_map_packet(FIXTURE.read_bytes())
     trait = MapContentTrait()
     trait.update_from_map_packet(packet)  # the fixture header is a keepalive frame
     true = GridCalibration(resolution=10.0, origin_x=0.0, origin_y=5.0, y_sign=1)
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
-    assert trait.calibration is None
+    with pytest.raises(RoborockException, match="No calibration available"):
+        trait.render_path_on_map()
 
 
 def test_render_path_on_map_requires_map() -> None:
@@ -268,7 +267,6 @@ def test_render_path_on_map_uses_derived_content() -> None:
     png = trait.render_path_on_map()
 
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    assert trait.calibration is not None
 
 
 def test_render_path_on_map_without_path_cannot_calibrate() -> None:
@@ -289,7 +287,6 @@ def test_load_overlays_places_zones_after_calibration() -> None:
     trait.update_from_map_packet(packet)
     true = GridCalibration(resolution=20.0, origin_x=0.0, origin_y=5.0, y_sign=1)
     trait.update_from_trace_packet(Q10TracePacket(points=_floor_world_points(packet, true, 6)))
-    assert trait.calibration is not None
     before = trait.render_path_on_map()
 
     def rect(zone_type: int, corners: list[tuple[int, int]]) -> bytes:

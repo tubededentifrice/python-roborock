@@ -1,8 +1,9 @@
 """Push-driven map traits for B01 Q10 devices.
 
-Map-related state arrives on two independent streams:
+Map-related state arrives on three independent streams:
 
-* map and trace packets are decoded by the protocol layer;
+* map packets are decoded from map-protocol responses;
+* trace packets are decoded from trace-protocol responses;
 * restricted zones and virtual walls arrive as ordinary DPS values.
 
 ``MapDpsTrait`` owns the low-level DPS read model. ``MapContentTrait`` depends
@@ -19,7 +20,6 @@ from roborock.data import RoborockBase
 from roborock.data.b01_q10.b01_q10_code_mappings import B01_Q10_DP
 from roborock.devices.traits.common import DpsDataConverter, TraitUpdateListener
 from roborock.exceptions import RoborockException
-from roborock.map.b01_grid_layers import GridCalibration
 from roborock.map.b01_q10_map_parser import (
     B01Q10MapParserConfig,
     Q10MapPacket,
@@ -90,12 +90,8 @@ class MapContentTrait(TraitUpdateListener):
     @property
     def rooms(self) -> list[Q10Room]:
         """Rooms reported by the device."""
-        return self._render.rooms if self._render else []
-
-    @property
-    def calibration(self) -> GridCalibration | None:
-        """The calibration used by the current rendered result."""
-        return self._render.calibration if self._render else None
+        packet = self._source.map_packet
+        return packet.rooms if packet else []
 
     @property
     def path(self) -> list[Q10Point]:
@@ -151,10 +147,6 @@ class MapContentTrait(TraitUpdateListener):
         """Return a PNG with the path, robot, zones and walls drawn."""
         if self._render is None:
             raise RoborockException("No map available; no map has been pushed yet")
-        if self._render.calibration is None:
-            raise RoborockException(
-                "No calibration available; a cleaning path must be captured (pushed) during a clean"
-            )
         return draw_path_on_map(
             self._render,
             config=self._config,
