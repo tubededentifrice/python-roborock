@@ -256,7 +256,7 @@ def test_short_trace_without_header_cannot_be_projected() -> None:
 
 
 def test_load_overlays_places_zones_after_calibration() -> None:
-    """Decoded no-go / no-mop zones are placed on MapData once calibrated."""
+    """Decoded no-go / no-mop zones are drawn once the sources calibrate."""
     map_dps = MapDpsTrait()
     trait = MapContentTrait(map_dps)
     packet = replace(parse_map_packet(FIXTURE.read_bytes()), header_calibration=_USABLE_HEADER)
@@ -275,25 +275,24 @@ def test_load_overlays_places_zones_after_calibration() -> None:
     blob = bytes([1, 1]) + rect(0, [(0, 0), (40, 0), (40, 40), (0, 40)])
     map_dps.update_from_dps({B01_Q10_DP.RESTRICTED_ZONE_UP: base64.b64encode(blob).decode()})
 
-    assert len(trait.zones) == 1
+    assert len(map_dps.zones) == 1
     assert trait.image_content != before
 
 
 def test_load_overlays_partial_update_keeps_existing_zones() -> None:
     """A status push without the zone DP (None) must not wipe loaded zones."""
     map_dps = MapDpsTrait()
-    trait = MapContentTrait(map_dps)
     blob = (
         bytes([1, 1])
         + bytes([0, 4])
         + b"".join(int.to_bytes(v & 0xFFFF, 2, "big") for xy in [(0, 0), (4, 0), (4, 4), (0, 4)] for v in xy)
     )
     map_dps.update_from_dps({B01_Q10_DP.RESTRICTED_ZONE_UP: base64.b64encode(blob).decode()})
-    assert len(trait.zones) == 1
+    assert len(map_dps.zones) == 1
     # A later partial update carrying only the (empty) virtual-wall DP.
     map_dps.update_from_dps({B01_Q10_DP.VIRTUAL_WALL_UP: "AA=="})
-    assert len(trait.zones) == 1  # zones preserved
-    assert trait.virtual_walls == []
+    assert len(map_dps.zones) == 1  # zones preserved
+    assert map_dps.virtual_walls == []
 
 
 def test_map_dps_trait_updates_high_level_map_content() -> None:
@@ -310,7 +309,7 @@ def test_map_dps_trait_updates_high_level_map_content() -> None:
 
     map_dps.update_from_dps({B01_Q10_DP.RESTRICTED_ZONE_UP: base64.b64encode(blob).decode()})
 
-    assert len(trait.zones) == 1
+    assert len(map_dps.zones) == 1
     assert notified  # listeners learn the overlays changed
 
 
@@ -323,6 +322,6 @@ def test_map_dps_push_without_overlay_data_points_is_noop() -> None:
 
     map_dps.update_from_dps({B01_Q10_DP.BATTERY: 50})
 
-    assert trait.zones == []
-    assert trait.virtual_walls == []
+    assert map_dps.zones == []
+    assert map_dps.virtual_walls == []
     assert not notified

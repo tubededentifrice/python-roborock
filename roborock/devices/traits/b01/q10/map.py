@@ -9,12 +9,12 @@ Map-related state arrives on three independent streams:
 ``MapDpsTrait`` owns the low-level DPS read model. ``MapContentTrait`` depends
 on it and combines that state with the latest map/trace packets through the pure
 functions in :mod:`roborock.map.b01_q10_render`. The high-level trait keeps only
-one grouped source snapshot and one replace-whole rendered image; calibration,
-path placement and overlay placement are not independently mutable trait state.
+the latest value from each source and one replace-whole rendered image;
+calibration, path placement and overlay placement remain inside the renderer.
 """
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from roborock.data import RoborockBase
 from roborock.data.b01_q10.b01_q10_code_mappings import B01_Q10_DP
@@ -52,21 +52,22 @@ class MapDpsTrait(MapDps, UpdatableTrait):
         MapDps.__init__(self)
         UpdatableTrait.__init__(self, command=None, logger=_LOGGER)
 
+    @property
+    def zones(self) -> list[Q10Zone]:
+        """Restricted zones decoded from the latest DPS value."""
+        return parse_zone_blob(self.restricted_zone_up)
 
-@dataclass(frozen=True)
-class Q10MapSource:
-    """The latest map-protocol inputs, replaced atomically on every push."""
-
-    map_packet: Q10MapPacket | None = None
-    trace_packet: Q10TracePacket | None = None
+    @property
+    def virtual_walls(self) -> list[Q10Zone]:
+        """Virtual walls decoded from the latest DPS value."""
+        return parse_virtual_wall_blob(self.virtual_wall_up)
 
 
 class MapContentTrait(TraitUpdateListener):
     """High-level composed Q10 map view.
 
-    Map and trace packet updates replace :attr:`_source`; DPS updates are owned
-    by the injected :class:`MapDpsTrait`. Rendering always produces one new
-    image, keeping the externally visible fields consistent.
+    The latest map and trace packets are combined with the injected
+    :class:`MapDpsTrait` whenever any of those three sources changes.
     """
 
     def __init__(
@@ -78,7 +79,8 @@ class MapContentTrait(TraitUpdateListener):
         TraitUpdateListener.__init__(self, logger=_LOGGER)
         self._config = map_parser_config or B01Q10MapParserConfig()
         self._map_dps = map_dps or MapDpsTrait()
-        self._source = Q10MapSource()
+        self._map_packet: Q10MapPacket | None = None
+        self._trace_packet: Q10TracePacket | None = None
         self._image_content: bytes | None = None
         self._map_dps.add_update_listener(self._map_dps_updated)
 
@@ -90,77 +92,53 @@ class MapContentTrait(TraitUpdateListener):
     @property
     def rooms(self) -> list[Q10Room]:
         """Rooms reported by the device."""
-        packet = self._source.map_packet
-        return packet.rooms if packet else []
+        return self._map_packet.rooms if self._map_packet else []
 
     @property
     def path(self) -> list[Q10Point]:
         """Full path from the latest trace packet."""
-        trace = self._source.trace_packet
-        return trace.points if trace else []
+        return self._trace_packet.points if self._trace_packet else []
 
     @property
     def robot_position(self) -> Q10Point | None:
         """Current robot position from the latest trace packet."""
-        trace = self._source.trace_packet
-        return trace.robot_position if trace else None
+        return self._trace_packet.robot_position if self._trace_packet else None
 
     @property
     def robot_heading(self) -> int | None:
         """Current robot heading from the latest trace packet."""
-        trace = self._source.trace_packet
-        return trace.heading if trace else None
-
-    @property
-    def zones(self) -> list[Q10Zone]:
-        """Restricted zones decoded from the low-level DPS trait."""
-        return parse_zone_blob(self._map_dps.restricted_zone_up)
-
-    @property
-    def virtual_walls(self) -> list[Q10Zone]:
-        """Virtual walls decoded from the low-level DPS trait."""
-        return parse_virtual_wall_blob(self._map_dps.virtual_wall_up)
+        return self._trace_packet.heading if self._trace_packet else None
 
     def update_from_map_packet(self, packet: Q10MapPacket) -> None:
-        """Replace the current map packet and compose a consistent result."""
-        source = replace(self._source, map_packet=packet)
-        render = self._compose(source)
-        if render is None:
-            return
-        self._source = source
-        self._image_content = render
+        """Store a map-protocol update and render the latest sources."""
+        self._map_packet = packet
+        self._render()
         self._notify_update()
 
     def update_from_trace_packet(self, packet: Q10TracePacket) -> None:
-        """Replace the complete current-session trace packet."""
-        self._source = replace(self._source, trace_packet=packet)
-        if self._source.map_packet is not None:
-            self._rebuild()
+        """Store a trace-protocol update and render the latest sources."""
+        self._trace_packet = packet
+        self._render()
         self._notify_update()
 
     def _map_dps_updated(self) -> None:
-        """Recompose placed overlays after the low-level DPS state changes."""
-        if self._source.map_packet is not None:
-            self._rebuild()
+        """Render after the low-level DPS source changes."""
+        self._render()
         self._notify_update()
 
-    def _compose(self, source: Q10MapSource) -> bytes | None:
-        """Compose a source snapshot, preserving the previous result on error."""
-        if source.map_packet is None:
-            return None
+    def _render(self) -> None:
+        """Render the latest map, trace and DPS sources, if a map is available."""
+        if self._map_packet is None:
+            return
         try:
-            return render_q10_map(
-                source.map_packet,
-                source.trace_packet,
-                Q10MapOverlays(zones=tuple(self.zones), virtual_walls=tuple(self.virtual_walls)),
+            self._image_content = render_q10_map(
+                self._map_packet,
+                self._trace_packet,
+                Q10MapOverlays(
+                    zones=tuple(self._map_dps.zones),
+                    virtual_walls=tuple(self._map_dps.virtual_walls),
+                ),
                 config=self._config,
             )
         except RoborockException as ex:
             _LOGGER.debug("Failed to render Q10 map packet: %s", ex)
-            return None
-
-    def _rebuild(self) -> None:
-        """Replace the derived render from the current source snapshot."""
-        render = self._compose(self._source)
-        if render is not None:
-            self._image_content = render
