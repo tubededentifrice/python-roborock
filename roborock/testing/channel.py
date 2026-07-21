@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from roborock.devices.transport.channel import Channel
 from roborock.mqtt.health_manager import HealthManager
+from roborock.mqtt.session import MqttQos
 from roborock.protocols.v1_protocol import LocalProtocolVersion
 from roborock.roborock_message import RoborockMessage
 
@@ -83,6 +84,7 @@ class FakeChannel(Channel):
         self.close = MagicMock(side_effect=self._close)
 
         self.protocol_version = LocalProtocolVersion.V1
+
         self.restart = AsyncMock()
         self.health_manager = HealthManager(self.restart)
 
@@ -102,10 +104,13 @@ class FakeChannel(Channel):
         """Return true if locally connected."""
         return self._is_connected and self._is_local
 
-    async def _publish(self, message: RoborockMessage) -> None:
+    async def _publish(self, message: RoborockMessage, qos: MqttQos = MqttQos.AT_MOST_ONCE) -> None:
         """Default publish implementation.
 
         Records the message in ``published_messages`` and executes ``publish_handler``.
+
+        The ``qos`` parameter is accepted for compatibility with
+        ``MqttChannel.publish`` but not simulated by the fake channel.
         """
         self.published_messages.append(message)
         if self.publish_side_effect:
