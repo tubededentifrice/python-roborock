@@ -27,6 +27,7 @@ TESTDATA_FILES = list(TESTDATA_PATH.glob("*.json"))
 TESTDATA_IDS = [x.stem for x in TESTDATA_FILES]
 
 MAP_FIXTURE = pathlib.Path("tests/map/testdata/b01_q10_map.bin")
+SAVED_MAP_FIXTURE = pathlib.Path("tests/map/testdata/b01_q10_saved_map_2obstacles.bin")
 TRACE_FIXTURE = pathlib.Path("tests/map/testdata/b01_q10_trace.bin")
 
 
@@ -47,6 +48,14 @@ def test_decode_message_map_packet() -> None:
     decoded = decode_message(message)
     assert isinstance(decoded, Q10MapPacket)
     assert {room.id: room.name for room in decoded.rooms} == {2: "Living Room", 3: "Bedroom"}
+
+
+def test_decode_message_saved_map_packet() -> None:
+    """A MAP_RESPONSE 03 01 saved-map payload decodes into a Q10MapPacket w/ obstacles."""
+    message = _message(SAVED_MAP_FIXTURE.read_bytes(), RoborockMessageProtocol.MAP_RESPONSE)
+    decoded = decode_message(message)
+    assert isinstance(decoded, Q10MapPacket)
+    assert len(decoded.obstacles) == 2
 
 
 def test_decode_message_trace_packet() -> None:

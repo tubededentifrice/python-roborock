@@ -33,7 +33,9 @@ from .b01_q10_map_parser import (
     B01Q10MapParser,
     B01Q10MapParserConfig,
     Q10EraseZone,
+    Q10HeaderCalibration,
     Q10MapPacket,
+    Q10Point,
     Q10TracePacket,
     erased_packet,
 )
@@ -56,6 +58,9 @@ _MIN_CALIBRATION_POINTS = 20
 # a much shorter path suffices to confirm it (early in a clean, not just a dense
 # one). See :func:`solve_calibration_with_origin`.
 _MIN_HEADER_CALIBRATION_POINTS = 4
+# Saved-map obstacle coordinates use this fixed number of raw units per grid
+# pixel around the map header origin, independently of trace calibration.
+_OBSTACLE_UNITS_PER_PIXEL = 50
 
 
 @dataclass(frozen=True)
@@ -100,8 +105,10 @@ def render_q10_map(
     if calibration is not None and trace is not None:
         _place_trace(map_data, calibration, trace)
         _place_overlays(map_data, calibration, overlays)
-        return _draw_map_content(parsed.image_content, map_data, config=config)
+    obstacles = _project_obstacles(packet.obstacles, packet.header_calibration)
 
+    if (calibration is not None and trace is not None) or obstacles:
+        return _draw_map_content(parsed.image_content, map_data, obstacles=obstacles, config=config)
     return parsed.image_content
 
 
@@ -216,13 +223,34 @@ def _place_overlays(
     map_data.walls = walls or None
 
 
+def _project_obstacles(
+    obstacles: Sequence[Q10Point],
+    header_calibration: Q10HeaderCalibration | None,
+) -> list[Point]:
+    """Project saved-map obstacles using their fixed header-anchored scale."""
+    if not obstacles or header_calibration is None:
+        return []
+    origin = header_calibration.origin_pixels()
+    if origin is None:
+        return []
+    calibration = GridCalibration(
+        resolution=_OBSTACLE_UNITS_PER_PIXEL,
+        origin_x=origin[0],
+        origin_y=origin[1],
+        y_sign=1,
+    )
+    return [Point(*calibration.world_to_pixel(obstacle.x, obstacle.y)) for obstacle in obstacles]
+
+
 def _draw_map_content(
     image_content: bytes,
     map_data: MapData,
     *,
+    obstacles: Sequence[Point] = (),
     config: B01Q10MapParserConfig,
     line_color: tuple[int, int, int, int] = (235, 64, 52, 255),
     position_color: tuple[int, int, int, int] = (255, 211, 0, 255),
+    obstacle_color: tuple[int, int, int, int] = (0, 0, 0, 128),
 ) -> bytes:
     """Draw projected map content onto a base PNG and return a fresh PNG."""
     scale = config.map_scale
@@ -256,6 +284,14 @@ def _draw_map_content(
             [(wall.x0 * scale, wall.y0 * scale), (wall.x1 * scale, wall.y1 * scale)],
             fill=(255, 64, 64, 255),
             width=max(2, scale),
+        )
+
+    obstacle_radius = 3 * scale
+    for obstacle in obstacles:
+        ox, oy = to_image(obstacle)
+        draw.ellipse(
+            [ox - obstacle_radius, oy - obstacle_radius, ox + obstacle_radius, oy + obstacle_radius],
+            fill=obstacle_color,
         )
 
     for path in map_data.path.path if map_data.path else []:

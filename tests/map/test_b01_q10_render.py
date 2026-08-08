@@ -31,11 +31,13 @@ from roborock.map.b01_q10_render import (
     _Q10_RESOLUTIONS,
     Q10MapOverlays,
     _erased_cells,
+    _project_obstacles,
     render_q10_map,
     solve_q10_calibration,
 )
 
 FIXTURE = Path("tests/map/testdata/b01_q10_map.bin")
+SAVED_MAP_2OBSTACLES = Path("tests/map/testdata/b01_q10_saved_map_2obstacles.bin")
 CONFIG = B01Q10MapParserConfig()
 
 # identity-ish calibration used across the geometry tests: world (x, y) -> grid
@@ -155,6 +157,38 @@ def test_render_partial_erase() -> None:
 
     assert 0 < len(cells) < packet.layers.width * packet.layers.height
     assert render != base
+
+
+def test_render_draws_saved_map_obstacles_without_trace() -> None:
+    """Saved-map obstacles use their header origin without trace calibration."""
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
+    obstacles = _project_obstacles(packet.obstacles, packet.header_calibration)
+    assert [(round(point.x, 1), round(point.y, 1)) for point in obstacles] == [
+        (72.4, 82.3),
+        (60.5, 120.4),
+    ]
+
+    base = Image.open(io.BytesIO(_render(replace(packet, obstacles=[])))).convert("RGBA")
+    rendered = Image.open(io.BytesIO(_render(packet))).convert("RGBA")
+    first = obstacles[0]
+    pixel = (round(first.x * CONFIG.map_scale), round(first.y * CONFIG.map_scale))
+    assert rendered.getpixel(pixel) != base.getpixel(pixel)
+
+
+def test_render_obstacles_require_usable_header_origin() -> None:
+    packet = parse_map_packet(SAVED_MAP_2OBSTACLES.read_bytes())
+    packet = replace(
+        packet,
+        header_calibration=Q10HeaderCalibration(
+            origin_x=0,
+            origin_y=0,
+            resolution=5,
+            charger_x=0,
+            charger_y=0,
+            charger_phi=0,
+        ),
+    )
+    assert _render(packet) == _render(replace(packet, obstacles=[]))
 
 
 def test_render_draws_heading_indicator() -> None:
